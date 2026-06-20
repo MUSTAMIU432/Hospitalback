@@ -11,6 +11,7 @@ class ApplicationDraftInput:
 
 @strawberry.input
 class ApplicationUpdateInput:
+    notification_email: str | None = None
     institution_name: str | None = None
     programme_applied: str | None = None
     start_date: date | None = None

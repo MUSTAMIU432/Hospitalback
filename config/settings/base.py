@@ -194,9 +194,23 @@ JWT_REFRESH_EXPIRY_DAYS = int(os.environ.get("JWT_REFRESH_EXPIRY_DAYS", "14"))
 # Deprecated: kept for backwards compatibility if code still reads it; access expiry uses JWT_ACCESS_EXPIRY_MINUTES.
 JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", "24"))
 
-# When true and DEFAULT_FROM_EMAIL / SMTP are configured, in-app notifications also send email.
+# ── Email / SMTP ─────────────────────────────────────────────────────────────
+# Set STUD_EMAIL_NOTIFICATIONS=1 in .env to enable email delivery.
+# Configure the SMTP_ vars below (or use Gmail with an App Password).
 STUD_EMAIL_NOTIFICATIONS = os.environ.get("STUD_EMAIL_NOTIFICATIONS", "0") == "1"
-DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "webmaster@localhost")
+
 EMAIL_BACKEND = os.environ.get(
-    "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+    "DJANGO_EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
 )
+EMAIL_HOST          = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT          = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS       = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+EMAIL_USE_SSL       = os.environ.get("EMAIL_USE_SSL", "0") == "1"
+EMAIL_HOST_USER     = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL  = os.environ.get(
+    "DEFAULT_FROM_EMAIL",
+    EMAIL_HOST_USER or "webmaster@localhost",
+)
+SERVER_EMAIL        = DEFAULT_FROM_EMAIL

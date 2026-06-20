@@ -1,5 +1,6 @@
 import base64
 import uuid
+from django.utils import timezone
 
 import strawberry
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -20,6 +21,7 @@ from apps.users.graphql.types import OperationResult
 from core.constants import (
     ApplicationStatus,
     ApplicationType as ApplicationTypeEnum,
+    NotificationType,
     PlacementScope,
     ReviewDecision,
     UserRole,
@@ -72,6 +74,7 @@ class StudyRequestsMutation:
         if app.status not in (ApplicationStatus.DRAFT, ApplicationStatus.RETURNED):
             raise ValidationError("Only draft or returned applications can be edited.")
         fields = [
+            "notification_email",
             "institution_name",
             "programme_applied",
             "start_date",
@@ -84,6 +87,7 @@ class StudyRequestsMutation:
             "supervisor_requested",
         ]
         payload = {
+            "notification_email": data.notification_email,
             "institution_name": data.institution_name,
             "programme_applied": data.programme_applied,
             "start_date": data.start_date,
@@ -270,16 +274,24 @@ class StudyRequestsMutation:
         from apps.employees.models import DepartmentHodAssignment, HospitalStaff
         from apps.notifications.models import Notification
 
+        from apps.employees.services.capabilities import user_has_staff_capability
+
         user = require_auth(info)
-        if getattr(user, "role", None) != UserRole.ASST_DIRECTOR:
-            raise PermissionDenied("Only the Assistant Director can forward final letters to HOD.")
+        allowed_roles = {UserRole.ASST_DIRECTOR, UserRole.MANAGEMENT}
+        if getattr(user, "role", None) not in allowed_roles and not user_has_staff_capability(user, "adr_hub_fb_reports"):
+            raise PermissionDenied("Only the Assistant Director or Top Management can forward final letters to HOD.")
 
         sender_name = " ".join(filter(None, [user.first_name, user.last_name])) or user.username
         forwarded = 0
+        skipped = 0
         for app_id in application_ids:
             app = Application.objects.select_related("applicant").get(pk=app_id)
             # Require at least one management review on this application
             if not ReviewTrail.objects.filter(application=app, stage="management").exists():
+                continue
+            # Skip if already forwarded to HOD
+            if app.hod_forwarded_at is not None:
+                skipped += 1
                 continue
             ref = app.app_ref or str(app.id)
             # Resolve HOD recipients from applicant's department
@@ -303,15 +315,67 @@ class StudyRequestsMutation:
                     sender=user,
                     message=(
                         f"Application {ref} — Final Decision Ready\n"
-                        f"Forwarded by: {sender_name} (Assistant Director)\n\n"
+                        f"Forwarded by: {sender_name}\n\n"
                         "Top Management has issued the final decision for this application. "
                         "Please review the final application report."
                     ),
                     notif_type=NotificationType.APPROVAL,
-                    destination_path="/reviewer/final-letter",
+                    destination_path="/hod/review-feedback/reports",
                 )
+            app.hod_forwarded_at = timezone.now()
+            app.save(update_fields=["hod_forwarded_at"])
             forwarded += 1
-        return OperationResult(ok=True, message=f"Final letter forwarded for {forwarded} application(s).")
+        msg = f"Final letter forwarded for {forwarded} application(s)."
+        if skipped:
+            msg += f" {skipped} already forwarded (skipped)."
+        return OperationResult(ok=True, message=msg)
+
+    @strawberry.mutation
+    def forward_final_letter_to_staff(self, info: Info, application_ids: list[uuid.UUID]) -> OperationResult:
+        """HOD notifies the staff applicant that the final decision letter is ready."""
+        from apps.applications.models import Application, ReviewTrail
+        from apps.notifications.models import Notification
+
+        from apps.employees.services.capabilities import user_has_staff_capability
+
+        user = require_auth(info)
+        allowed_roles = {UserRole.HOD, UserRole.ASST_DIRECTOR, UserRole.MANAGEMENT}
+        has_adr_cap = user_has_staff_capability(user, "adr_hub_fb_reports")
+        has_hod_cap = user_has_staff_capability(user, "hod_hub_fb_reports")
+        if getattr(user, "role", None) not in allowed_roles and not has_adr_cap and not has_hod_cap:
+            raise PermissionDenied("Only HOD, Assistant Director, or Top Management can forward final letters to staff.")
+
+        sender_name = " ".join(filter(None, [user.first_name, user.last_name])) or user.username
+        forwarded = 0
+        skipped = 0
+        for app_id in application_ids:
+            app = Application.objects.select_related("applicant").get(pk=app_id)
+            if not ReviewTrail.objects.filter(application=app, stage="management").exists():
+                continue
+            # Skip if already forwarded to staff
+            if app.staff_forwarded_at is not None:
+                skipped += 1
+                continue
+            ref = app.app_ref or str(app.id)
+            Notification.objects.create(
+                recipient=app.applicant,
+                sender=user,
+                message=(
+                    f"Application {ref} — Final Decision Ready\n"
+                    f"Forwarded by: {sender_name}\n\n"
+                    "The final decision for your application has been issued. "
+                    "Please review your application report."
+                ),
+                notif_type=NotificationType.APPROVAL,
+                destination_path="/hospital-staff/feedback/hod-report",
+            )
+            app.staff_forwarded_at = timezone.now()
+            app.save(update_fields=["staff_forwarded_at"])
+            forwarded += 1
+        msg = f"Final letter forwarded to staff for {forwarded} application(s)."
+        if skipped:
+            msg += f" {skipped} already forwarded (skipped)."
+        return OperationResult(ok=True, message=msg)
 
     @strawberry.mutation
     def delete_review_trail_entry(self, info: Info, review_id: uuid.UUID) -> OperationResult:

@@ -543,6 +543,10 @@ def send_application_change_request(
     if target not in valid_targets:
         target = ChangeRequestTarget.STAFF
 
+    ref = application.app_ref or str(application.id)
+    reply = (reply_contact_email or "").strip()
+    sender_name = _sender_display_name(sender)
+
     # ── Internal Top Management ↔ Assistant Director (in-app notifications + ADR workspace) ──
     internal_targets = frozenset({ChangeRequestTarget.TO_ADR, ChangeRequestTarget.TO_MGMT})
     if target in internal_targets:
@@ -599,10 +603,6 @@ def send_application_change_request(
                 "Only Assistant Director or Top Management can send change requests directly to the Head of Department."
             )
 
-    ref = application.app_ref or str(application.id)
-    reply = (reply_contact_email or "").strip()
-    sender_name = _sender_display_name(sender)
-
     notify_staff = target in (ChangeRequestTarget.STAFF, ChangeRequestTarget.BOTH)
     notify_hod   = target in (ChangeRequestTarget.HOD, ChangeRequestTarget.BOTH)
 
@@ -631,6 +631,7 @@ def send_application_change_request(
                 recipient=application.applicant,
                 subject=f"STUD change request — {ref}",
                 body=applicant_payload,
+                email_override=(application.notification_email or "").strip(),
             )
 
     # ── HOD notification ──────────────────────────────────────────────────────

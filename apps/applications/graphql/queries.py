@@ -10,7 +10,9 @@ from apps.applications.graphql.types import ApplicationType, EncodedFilePayload
 from apps.applications.models import Application, ApplicationDocument
 from apps.applications.services import access as access_svc
 from apps.applications.services import workflow
+from apps.employees.services.capabilities import user_has_staff_capability
 from apps.users.graphql.auth import require_auth
+from core.constants import ApplicationType as AppType
 from core.constants import UserRole
 
 
@@ -46,6 +48,81 @@ class StudyRequestsQuery:
             return None
         workflow.assert_can_view(user, app)
         return app
+
+    @strawberry.field
+    def hod_forwarded_applications(self, info: Info) -> list[ApplicationType]:
+        """Applications the HOD already actioned that have moved past the HOD stage.
+
+        These stay visible (read-only) on the HOD review screens for records —
+        the HOD can no longer send another review, but the application and its
+        sent review feedback are kept. We key off the pipeline stage/status
+        (not hod_forwarded_at, which tracks the *final letter forwarded back to
+        the HOD* — a different concern).
+        """
+        from django.db.models import Q
+
+        from core.constants import ApplicationStatus, ReviewStage
+
+        user = require_auth(info)
+        is_hod = (
+            getattr(user, "role", None) == UserRole.HOD
+            or user_has_staff_capability(user, "hod_assess_details")
+        )
+        if not is_hod:
+            return []
+        department_ids = access_svc._hod_department_ids(user)
+        if not department_ids:
+            return []
+        return list(
+            Application.objects.filter(
+                app_type=AppType.FURTHER_STUDIES,
+                applicant__hospital_staff_profile__department_id__in=department_ids,
+            )
+            .filter(
+                Q(current_stage__in=[ReviewStage.ASST_DIRECTOR, ReviewStage.MANAGEMENT])
+                | Q(status__in=[ApplicationStatus.APPROVED, ApplicationStatus.REJECTED])
+            )
+            .exclude(applicant_id=user.id)
+            .select_related("applicant")
+            .order_by("-updated_at")
+        )
+
+    @strawberry.field
+    def adr_forwarded_applications(self, info: Info) -> list[ApplicationType]:
+        """Applications the Assistant Director already forwarded to Management.
+
+        After the ADR forwards a review to Top Management the application leaves
+        the ADR's active queue (current_stage becomes "management"). These rows
+        stay visible (read-only) on the ADR screens for records — the ADR can no
+        longer send another review, but the application and its sent review
+        feedback are kept until the final report is issued.
+        """
+        from django.db.models import Exists, OuterRef, Q
+
+        from apps.applications.models import ReviewTrail
+        from core.constants import ApplicationStatus, ReviewStage
+
+        user = require_auth(info)
+        is_adr = (
+            getattr(user, "role", None) == UserRole.ASST_DIRECTOR
+            or user_has_staff_capability(user, "adr_assess_details")
+        )
+        if not is_adr:
+            return []
+        adr_acted = ReviewTrail.objects.filter(
+            application_id=OuterRef("pk"),
+            stage=ReviewStage.ASST_DIRECTOR,
+        )
+        return list(
+            Application.objects.filter(app_type=AppType.FURTHER_STUDIES)
+            .filter(
+                Q(current_stage=ReviewStage.MANAGEMENT)
+                | Q(status__in=[ApplicationStatus.APPROVED, ApplicationStatus.REJECTED])
+            )
+            .filter(Exists(adr_acted))
+            .select_related("applicant")
+            .order_by("-updated_at")
+        )
 
     @strawberry.field
     def field_placements_for_university(self, info: Info) -> list[ApplicationType]:

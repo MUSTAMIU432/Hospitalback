@@ -47,6 +47,11 @@ class Application(models.Model):
     current_stage = models.CharField(max_length=50, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    notification_email = models.EmailField(
+        blank=True,
+        default="",
+        help_text="Email address provided by the applicant on the form for receiving notifications.",
+    )
     institution_name = models.CharField(max_length=200, blank=True, default="")
     programme_applied = models.CharField(max_length=200, blank=True, default="")
     start_date = models.DateField(null=True, blank=True)
@@ -91,6 +96,16 @@ class Application(models.Model):
         null=True,
         blank=True,
         help_text="When placement details were published to the university and student.",
+    )
+    hod_forwarded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the final letter was forwarded to HOD by ADR/Management.",
+    )
+    staff_forwarded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the final letter was forwarded to the staff applicant by HOD/ADR/Management.",
     )
 
     class Meta:

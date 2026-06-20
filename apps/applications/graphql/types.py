@@ -11,6 +11,18 @@ from apps.users.graphql.types import UserType  # noqa: F401 — GraphQL type for
 
 
 @strawberry.type
+class ApplicantStaffProfileType:
+    staff_number: str
+    full_name: str
+    phone: str
+    national_id: str
+    date_employed: str
+    department: str
+    designation: str
+    working_site: str
+
+
+@strawberry.type
 class ApplicantStudentProfileType:
     full_name: str
     registration_no: str
@@ -88,6 +100,7 @@ class ReviewTrailType:
         "current_stage",
         "submitted_at",
         "updated_at",
+        "notification_email",
         "institution_name",
         "programme_applied",
         "start_date",
@@ -102,6 +115,8 @@ class ReviewTrailType:
         "placement_conducted_site",
         "hr_feedback_for_university",
         "field_records_shared_at",
+        "hod_forwarded_at",
+        "staff_forwarded_at",
     ],
 )
 class ApplicationType:
@@ -138,6 +153,28 @@ class ApplicationType:
         if not user_can_see_internal_change_requests(user):
             qs = qs.exclude(target__in=internal)
         return list(qs.order_by("-created_at"))
+
+    @strawberry.field
+    def applicant_staff_profile(self, root: Application) -> ApplicantStaffProfileType | None:
+        profile = getattr(root.applicant, "hospital_staff_profile", None)
+        if profile is None:
+            try:
+                from apps.employees.models import HospitalStaff
+                profile = HospitalStaff.objects.select_related(
+                    "department", "designation", "working_site"
+                ).get(user_id=root.applicant_id)
+            except Exception:
+                return None
+        return ApplicantStaffProfileType(
+            staff_number=profile.staff_number or "",
+            full_name=profile.full_name or "",
+            phone=profile.phone or "",
+            national_id=profile.national_id or "",
+            date_employed=str(profile.date_employed) if profile.date_employed else "",
+            department=getattr(profile.department, "name", "") or "",
+            designation=getattr(profile.designation, "name", "") or "",
+            working_site=getattr(profile.working_site, "name", "") or "",
+        )
 
     @strawberry.field
     def applicant_student_profile(self, root: Application) -> ApplicantStudentProfileType | None:

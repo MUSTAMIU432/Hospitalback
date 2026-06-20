@@ -1,10 +1,88 @@
+import html as _html
+import re
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
 
 from apps.employees.models import DepartmentHodAssignment, HospitalStaff
 from apps.notifications.models import Notification
 from core.constants import NotificationType, UserRole
+
+
+_APP_REF_RE = re.compile(r"\b(APP-\d{4}-\d+)\b", re.IGNORECASE)
+
+
+def _build_html_email(subject: str, body: str) -> str:
+    escaped = _html.escape(body)
+    # Highlight application references like APP-2026-00001
+    highlighted = _APP_REF_RE.sub(
+        r'<span style="font-family:ui-monospace,monospace;font-weight:600;color:#1d4ed8;">\1</span>',
+        escaped,
+    )
+    paragraphs = "".join(
+        f'<p style="margin:0 0 12px 0;line-height:1.65;">{line}</p>'
+        if line.strip() else '<p style="margin:0 0 8px 0;">&nbsp;</p>'
+        for line in highlighted.splitlines()
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{_html.escape(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f0f4f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f4f8;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.10);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#1e3a5f 0%,#1e4d8c 100%);padding:28px 36px 24px;">
+              <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.55);">Kchekundu Hospital</p>
+              <h1 style="margin:6px 0 0;font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.01em;">STUD Management System</h1>
+              <p style="margin:4px 0 0;font-size:12px;color:rgba(255,255,255,0.60);">Hospital Field &amp; Further Studies Management</p>
+            </td>
+          </tr>
+
+          <!-- Divider stripe -->
+          <tr><td style="height:4px;background:linear-gradient(90deg,#3b82f6,#06b6d4);"></td></tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="background:#ffffff;padding:32px 36px 28px;">
+              <p style="margin:0 0 20px;font-size:13px;font-weight:600;color:#374151;letter-spacing:0.04em;text-transform:uppercase;border-bottom:1px solid #e5e7eb;padding-bottom:10px;">Notification</p>
+              <div style="font-size:14px;color:#1f2937;">
+                {paragraphs}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;border-top:1px solid #e5e7eb;padding:18px 36px;">
+              <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.6;">
+                This is an automated message from the STUD Management System. Please do not reply directly to this email.<br>
+                &copy; Kchekundu Hospital &mdash; Hospital Field &amp; Further Studies Management System
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def _send_email(*, to: str, subject: str, body: str, from_email=None) -> None:
+    sender = from_email or getattr(settings, "DEFAULT_FROM_EMAIL", None)
+    msg = EmailMultiAlternatives(subject, body, sender, [to])
+    msg.attach_alternative(_build_html_email(subject, body), "text/html")
+    msg.send(fail_silently=True)
 
 
 def _maybe_email_copy(*, recipient, subject: str, body: str, force: bool = False) -> None:
@@ -14,13 +92,7 @@ def _maybe_email_copy(*, recipient, subject: str, body: str, force: bool = False
     if not email:
         return
     try:
-        send_mail(
-            subject,
-            body,
-            getattr(settings, "DEFAULT_FROM_EMAIL", None),
-            [email],
-            fail_silently=True,
-        )
+        _send_email(to=email, subject=subject, body=body)
     except Exception:
         pass
 
@@ -70,9 +142,21 @@ def notify_user(
     return n
 
 
-def send_email_copy(*, recipient, subject: str, body: str) -> None:
-    """Explicit email channel (independent of in-app notifications)."""
-    _maybe_email_copy(recipient=recipient, subject=subject, body=body, force=True)
+def send_email_copy(*, recipient, subject: str, body: str, email_override: str = "") -> None:
+    """Explicit email channel (independent of in-app notifications).
+
+    Pass email_override to send to a specific address instead of recipient.email
+    (e.g. the notification_email the applicant filled in on their application form).
+    """
+    if email_override.strip():
+        if not getattr(settings, "STUD_EMAIL_NOTIFICATIONS", False):
+            return
+        try:
+            _send_email(to=email_override.strip(), subject=subject, body=body)
+        except Exception:
+            pass
+    else:
+        _maybe_email_copy(recipient=recipient, subject=subject, body=body, force=True)
 
 
 def notify_users(
