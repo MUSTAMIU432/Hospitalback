@@ -118,16 +118,29 @@ def _cors_origins() -> list[str]:
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://localhost:8080,http://127.0.0.1:8080",
+        "http://localhost:8080,http://127.0.0.1:8080,"
+        # Capacitor / Android WebView origins (mobile APK). With
+        # androidScheme:"http" the app origin is http://localhost.
+        "http://localhost,https://localhost,capacitor://localhost",
     )
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 CORS_ALLOWED_ORIGINS = _cors_origins()
 CORS_ALLOW_CREDENTIALS = True
+# Allow any localhost:PORT and capacitor origins (covers WebView quirks in dev).
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost(:\d+)?$",
+    r"^https://localhost(:\d+)?$",
+    r"^http://127\.0\.0\.1(:\d+)?$",
+    r"^capacitor://localhost$",
+]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Whitenoise serves static files (Django admin CSS, etc.) in production.
+    # Must come right after SecurityMiddleware and before everything else.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -181,6 +194,16 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Whitenoise: compress + hash static filenames so they cache well and serve fast.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"

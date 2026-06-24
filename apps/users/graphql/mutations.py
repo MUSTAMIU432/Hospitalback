@@ -1,3 +1,5 @@
+import uuid
+
 import strawberry
 from django.contrib.auth import authenticate
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -7,7 +9,10 @@ from apps.employees.models import HospitalStaff
 from apps.students.models import StudentProfile
 from apps.users.graphql.auth import require_auth
 from apps.users.services.staff_credentials import hospital_staff_login_password_ok
-from apps.users.services.student_credentials import student_login_password_ok
+from apps.users.services.student_credentials import (
+    student_default_password_from_full_name,
+    student_login_password_ok,
+)
 from apps.users.graphql.types import AuthPayload, OperationResult, UserType
 from apps.users.jwt_utils import (
     get_user_from_refresh_token,
@@ -18,6 +23,22 @@ from apps.users.models import User
 from apps.users.services import provisioning
 from core.constants import UserRole
 from strawberry_django.utils.requests import get_request
+
+_TENANT_ADMIN_ROLES = {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}
+
+
+def _require_sysadmin_and_get_admin(info: Info, user_id: uuid.UUID) -> User:
+    """Authorise the sysadmin caller and return the target tenant-admin user."""
+    acting = require_auth(info)
+    if getattr(acting, "role", None) != UserRole.SYSADMIN:
+        raise PermissionDenied("Only system administrators may manage tenant administrators.")
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist as exc:
+        raise ValidationError("Administrator not found.") from exc
+    if target.role not in _TENANT_ADMIN_ROLES:
+        raise ValidationError("This user is not a hospital or university administrator.")
+    return target
 
 
 @strawberry.type
@@ -107,6 +128,61 @@ class UsersMutation:
             first_name=first_name,
         )
         return User.objects.get(pk=user.pk)
+
+    @strawberry.mutation
+    def update_tenant_admin(
+        self,
+        info: Info,
+        user_id: uuid.UUID,
+        first_name: str | None = None,
+        email: str | None = None,
+        role: str | None = None,
+        is_active: bool | None = None,
+    ) -> UserType:
+        """Sysadmin: edit a tenant administrator's display name, email, role, or active state."""
+        target = _require_sysadmin_and_get_admin(info, user_id)
+        fields: list[str] = []
+        if first_name is not None:
+            target.first_name = first_name.strip()[:150]
+            fields.append("first_name")
+        if email is not None:
+            target.email = email.strip()
+            fields.append("email")
+        if role is not None:
+            r = role.strip()
+            if r not in {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}:
+                raise ValidationError("Role must be hospital admin or university admin.")
+            target.role = r
+            fields.append("role")
+        if is_active is not None:
+            target.is_active = bool(is_active)
+            fields.append("is_active")
+        if fields:
+            target.save(update_fields=fields)
+        return User.objects.get(pk=target.pk)
+
+    @strawberry.mutation
+    def reset_tenant_admin_password(self, info: Info, user_id: uuid.UUID) -> OperationResult:
+        """Sysadmin: reset an admin to the default temp password (first word of display
+        name) and force a password change on next login. Returns the temp password."""
+        target = _require_sysadmin_and_get_admin(info, user_id)
+        temp = student_default_password_from_full_name(target.first_name or target.username)
+        if not temp:
+            raise ValidationError(
+                "Cannot derive a temp password — set a display name with at least one word first."
+            )
+        target.set_password(temp)
+        target.is_first_login = True
+        target.save(update_fields=["password", "is_first_login"])
+        return OperationResult(ok=True, message=temp)
+
+    @strawberry.mutation
+    def delete_tenant_admin(self, info: Info, user_id: uuid.UUID) -> OperationResult:
+        """Sysadmin: permanently delete a tenant administrator account."""
+        target = _require_sysadmin_and_get_admin(info, user_id)
+        uname = target.username
+        target.delete()
+        return OperationResult(ok=True, message=f"Administrator {uname} deleted.")
 
     @strawberry.mutation
     def refresh_token(self, info: Info, token: str) -> AuthPayload:
