@@ -24,3 +24,13 @@ class ApplicationUpdateInput:
     supervisor_requested: str | None = None
     hospital_department_id: uuid.UUID | None = None
     placement_scope: str | None = None
+    # Field-attachment specifics
+    field_area: str | None = None
+    postal_address: str | None = None
+    # Student identity (prefilled from profile, editable on the form)
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    faculty: str | None = None
+    course: str | None = None
+    year_of_study: int | None = None

@@ -13,12 +13,14 @@ from apps.employees.graphql.inputs import (
     UpdateHospitalStaffCapabilitiesInput,
 )
 from apps.employees.graphql.types import (
+    CapabilitySectionType,
     DepartmentHodAssignmentType,
     HospitalStaffType,
     StaffCapabilityType,
     StaffRoleType,
 )
 from apps.employees.models import (
+    CapabilitySection,
     DepartmentHodAssignment,
     HospitalStaff,
     StaffCapability,
@@ -234,6 +236,73 @@ class HospitalStaffMutation:
         except ProtectedError as exc:
             raise ValidationError("This role is still assigned to staff and cannot be permanently deleted.") from exc
         return OperationResult(ok=True, message="Role deleted permanently.")
+
+    # ── Capability sections (the starting point of the capability journey) ──
+    @strawberry.mutation
+    def create_capability_section(
+        self,
+        info: Info,
+        key: str,
+        label: str,
+        description: str = "",
+        sort_order: int = 0,
+    ) -> CapabilitySectionType:
+        acting = require_auth(info)
+        if getattr(acting, "role", None) != UserRole.HOSPITAL_ADMIN:
+            raise PermissionDenied("Only hospital admin can manage capability sections.")
+        k = key.strip().lower().replace(" ", "_")
+        if not k:
+            raise ValidationError("Section key is required.")
+        if CapabilitySection.objects.filter(key=k).exists():
+            raise ValidationError("A section with this key already exists.")
+        return CapabilitySection.objects.create(
+            key=k,
+            label=label.strip() or k.replace("_", " ").title(),
+            description=(description or "").strip(),
+            sort_order=sort_order,
+            is_active=True,
+        )
+
+    @strawberry.mutation
+    def update_capability_section(
+        self,
+        info: Info,
+        section_id: strawberry.ID,
+        label: str | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+        sort_order: int | None = None,
+    ) -> CapabilitySectionType:
+        acting = require_auth(info)
+        if getattr(acting, "role", None) != UserRole.HOSPITAL_ADMIN:
+            raise PermissionDenied("Only hospital admin can manage capability sections.")
+        section = CapabilitySection.objects.get(pk=section_id)
+        if label is not None:
+            section.label = label.strip() or section.label
+        if description is not None:
+            section.description = description.strip()
+        if is_active is not None:
+            section.is_active = is_active
+        if sort_order is not None:
+            section.sort_order = sort_order
+        section.save()
+        return section
+
+    @strawberry.mutation
+    def delete_capability_section(self, info: Info, section_id: strawberry.ID) -> OperationResult:
+        acting = require_auth(info)
+        if getattr(acting, "role", None) != UserRole.HOSPITAL_ADMIN:
+            raise PermissionDenied("Only hospital admin can manage capability sections.")
+        section = CapabilitySection.objects.get(pk=section_id)
+        cap_count = StaffCapability.objects.filter(module=section.key).count()
+        if cap_count:
+            raise ValidationError(
+                f"Move or delete this section's {cap_count} capabilit"
+                f"{'ies' if cap_count != 1 else 'y'} first."
+            )
+        key = section.key
+        section.delete()
+        return OperationResult(ok=True, message=f"Section {key} deleted.")
 
     @strawberry.mutation
     def create_staff_capability(

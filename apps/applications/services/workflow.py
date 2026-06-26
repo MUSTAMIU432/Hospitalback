@@ -197,6 +197,8 @@ def review_application(
     if decision == ReviewDecision.REJECTED:
         application.status = ApplicationStatus.REJECTED
         application.current_stage = ""
+        # Keep the HR reason for the rejection letter (student field placement).
+        application.hr_decision_reason = remarks.strip()
         application.save()
         notify.notify_applicant(
             application,

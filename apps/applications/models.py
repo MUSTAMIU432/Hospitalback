@@ -97,6 +97,23 @@ class Application(models.Model):
         blank=True,
         help_text="When placement details were published to the university and student.",
     )
+    field_area = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Area where the student intends to conduct the field attachment.",
+    )
+    postal_address = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Applicant's postal address for correspondence.",
+    )
+    hr_decision_reason = models.TextField(
+        blank=True,
+        default="",
+        help_text="HR's reason on accept/reject — included in the acceptance/rejection letter.",
+    )
     hod_forwarded_at = models.DateTimeField(
         null=True,
         blank=True,

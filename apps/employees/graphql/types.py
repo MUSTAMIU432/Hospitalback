@@ -1,6 +1,12 @@
 import strawberry_django
 
-from apps.employees.models import DepartmentHodAssignment, HospitalStaff, StaffCapability, StaffRole
+from apps.employees.models import (
+    CapabilitySection,
+    DepartmentHodAssignment,
+    HospitalStaff,
+    StaffCapability,
+    StaffRole,
+)
 from apps.hospital_directory.graphql.types import (
     DepartmentType,
     DesignationType,
@@ -14,6 +20,14 @@ from apps.users.graphql.types import UserType
     fields=["id", "code", "name", "description", "is_active", "sort_order"],
 )
 class StaffRoleType:
+    pass
+
+
+@strawberry_django.type(
+    CapabilitySection,
+    fields=["id", "key", "label", "description", "is_active", "sort_order"],
+)
+class CapabilitySectionType:
     pass
 
 

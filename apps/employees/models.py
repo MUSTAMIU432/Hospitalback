@@ -27,6 +27,35 @@ class StaffRole(models.Model):
         return self.name
 
 
+class CapabilitySection(models.Model):
+    """Grouping for capabilities (a "section" / module).
+
+    ``key`` is the stable identifier and is the value stored on
+    ``StaffCapability.module`` — i.e. a capability belongs to the section whose
+    ``key`` equals its ``module``. This keeps existing module-based grouping
+    working while letting sections exist on their own (empty, renamable label,
+    reorderable, deactivatable). The capability journey starts here.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(
+        max_length=80,
+        unique=True,
+        validators=[RegexValidator(r"^[a-z0-9_]+$", "Use a lowercase key, e.g. field_management.")],
+    )
+    label = models.CharField(max_length=180)
+    description = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "capability_sections"
+        ordering = ["sort_order", "label"]
+
+    def __str__(self) -> str:
+        return self.label
+
+
 class StaffCapability(models.Model):
     """Database-driven permissions catalog."""
 

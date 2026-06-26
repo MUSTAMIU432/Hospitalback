@@ -29,8 +29,23 @@ def staff_capabilities_for_user(user) -> list[str]:
     return sorted(role_caps)
 
 
+# A few permissions exist under two code names: the legacy reviewer-flow code
+# (``*_assess_details``) and the current hub code (``*_hub_app_review``). They mean
+# the same thing — "review staff applications at this stage" — so holding either
+# satisfies a check for the other. Capability-driven reviewers are provisioned
+# with the hub codes, while older backend gates ask for the assess_details codes.
+_CAP_EQUIVALENTS: dict[str, set[str]] = {
+    "hod_assess_details": {"hod_assess_details", "hod_hub_app_review"},
+    "hod_hub_app_review": {"hod_assess_details", "hod_hub_app_review"},
+    "adr_assess_details": {"adr_assess_details", "adr_hub_app_review"},
+    "adr_hub_app_review": {"adr_assess_details", "adr_hub_app_review"},
+}
+
+
 def user_has_staff_capability(user, capability: str) -> bool:
-    return capability in staff_capabilities_for_user(user)
+    have = set(staff_capabilities_for_user(user))
+    wanted = _CAP_EQUIVALENTS.get(capability, {capability})
+    return bool(have & wanted)
 
 
 def users_with_staff_capability(capability: str):

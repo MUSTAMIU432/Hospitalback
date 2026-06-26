@@ -15,7 +15,10 @@ from apps.applications.graphql.types import (
 )
 from apps.applications.models import Application
 from apps.applications.services import workflow
-from apps.applications.services.field_acceptance_pdf import build_field_acceptance_pdf
+from apps.applications.services.field_acceptance_pdf import (
+    build_field_acceptance_pdf,
+    build_field_rejection_pdf,
+)
 from apps.users.graphql.auth import require_auth
 from apps.users.graphql.types import OperationResult
 from core.constants import (
@@ -26,6 +29,49 @@ from core.constants import (
     ReviewDecision,
     UserRole,
 )
+
+
+def _update_student_identity(user, data: ApplicationUpdateInput) -> None:
+    """Persist student field-placement identity edits (name/faculty/course/year)
+    back to the student profile/user. No-op for non-students and the staff flow."""
+    if getattr(user, "role", None) != UserRole.STUDENT:
+        return
+    from apps.students.models import StudentProfile
+
+    sp = StudentProfile.objects.filter(user=user).first()
+    if sp is None:
+        return
+
+    user_fields: list[str] = []
+    if data.first_name is not None:
+        user.first_name = data.first_name.strip()[:150]
+        user_fields.append("first_name")
+    if data.last_name is not None:
+        user.last_name = data.last_name.strip()[:150]
+        user_fields.append("last_name")
+    if user_fields:
+        user.save(update_fields=user_fields)
+
+    sp_fields: list[str] = []
+    if data.middle_name is not None:
+        sp.middle_name = data.middle_name.strip()[:60]
+        sp_fields.append("middle_name")
+    if data.faculty is not None:
+        sp.faculty = data.faculty.strip()[:100]
+        sp_fields.append("faculty")
+    if data.course is not None:
+        sp.programme = data.course.strip()[:100]
+        sp_fields.append("programme")
+    if data.year_of_study is not None:
+        sp.year_of_study = data.year_of_study
+        sp_fields.append("year_of_study")
+    # Keep full_name aligned with first/middle/last when any name part changed.
+    if user_fields or "middle_name" in sp_fields:
+        parts = [user.first_name, sp.middle_name, user.last_name]
+        sp.full_name = " ".join(p for p in parts if p).strip()[:100]
+        sp_fields.append("full_name")
+    if sp_fields:
+        sp.save(update_fields=sp_fields)
 
 
 @strawberry.type
@@ -85,6 +131,8 @@ class StudyRequestsMutation:
             "attachment_start",
             "attachment_end",
             "supervisor_requested",
+            "field_area",
+            "postal_address",
         ]
         payload = {
             "notification_email": data.notification_email,
@@ -98,11 +146,17 @@ class StudyRequestsMutation:
             "attachment_start": data.attachment_start,
             "attachment_end": data.attachment_end,
             "supervisor_requested": data.supervisor_requested,
+            "field_area": data.field_area,
+            "postal_address": data.postal_address,
         }
         for name in fields:
             val = payload[name]
             if val is not None:
                 setattr(app, name, val)
+
+        # Student identity fields are prefilled from the profile but editable on
+        # the field-attachment form — persist any changes back to the profile/user.
+        _update_student_identity(user, data)
         if data.placement_scope is not None:
             ps = data.placement_scope.strip()
             allowed = {PlacementScope.INDIVIDUAL, PlacementScope.GROUP}
@@ -448,6 +502,24 @@ class StudyRequestsMutation:
         ref = (app.app_ref or str(app.id)).replace("/", "-")
         return PdfPayload(
             filename=f"field-acceptance-{ref}.pdf",
+            content_base64=base64.b64encode(raw).decode("ascii"),
+        )
+
+    @strawberry.mutation
+    def field_rejection_pdf_base64(self, info: Info, application_id: uuid.UUID) -> PdfPayload:
+        user = require_auth(info)
+        if getattr(user, "role", None) != UserRole.STUDENT:
+            raise PermissionDenied("Only students may download the field rejection letter.")
+        app = Application.objects.get(pk=application_id)
+        if app.applicant_id != user.id:
+            raise PermissionDenied("Not your application.")
+        try:
+            raw = build_field_rejection_pdf(app)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        ref = (app.app_ref or str(app.id)).replace("/", "-")
+        return PdfPayload(
+            filename=f"field-rejection-{ref}.pdf",
             content_base64=base64.b64encode(raw).decode("ascii"),
         )
 

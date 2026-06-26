@@ -95,6 +95,7 @@ class StudentProfile(models.Model):
     year_of_study = models.PositiveSmallIntegerField(
         validators=[MinValueValidator(1), MaxValueValidator(6)],
     )
+    middle_name = models.CharField(max_length=60, blank=True, default="")
     phone = models.CharField(max_length=20)
     contact_email = models.EmailField(blank=True, default="")
     gender = models.CharField(

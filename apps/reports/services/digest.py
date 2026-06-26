@@ -29,9 +29,10 @@ def dashboard_digest_for_user(user) -> dict:
     ).count()
 
     if role == UserRole.SYSADMIN:
-        out["users_total"] = User.objects.filter(
-            role__in=(UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN)
-        ).count()
+        # Platform-wide overview: count everyone, all staff, and all students.
+        out["users_total"] = User.objects.count()
+        out["hospital_staff_total"] = HospitalStaff.objects.count()
+        out["students_total"] = StudentProfile.objects.count()
         return out
 
     if role == UserRole.HOSPITAL_ADMIN:

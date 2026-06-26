@@ -5,12 +5,14 @@ from django.core.exceptions import PermissionDenied
 from strawberry.types import Info
 
 from apps.employees.graphql.types import (
+    CapabilitySectionType,
     DepartmentHodAssignmentType,
     HospitalStaffType,
     StaffCapabilityType,
     StaffRoleType,
 )
 from apps.employees.models import (
+    CapabilitySection,
     DepartmentHodAssignment,
     HospitalStaff,
     StaffCapability,
@@ -46,6 +48,14 @@ class HospitalStaffQuery:
     def staff_roles(self, info: Info, active_only: bool = True) -> list[StaffRoleType]:
         require_auth(info)
         qs = StaffRole.objects.all().order_by("sort_order", "name")
+        if active_only:
+            qs = qs.filter(is_active=True)
+        return list(qs)
+
+    @strawberry.field
+    def capability_sections(self, info: Info, active_only: bool = True) -> list[CapabilitySectionType]:
+        require_auth(info)
+        qs = CapabilitySection.objects.all().order_by("sort_order", "label")
         if active_only:
             qs = qs.filter(is_active=True)
         return list(qs)

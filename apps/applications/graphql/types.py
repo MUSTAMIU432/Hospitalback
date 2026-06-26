@@ -31,6 +31,10 @@ class ApplicantStudentProfileType:
     year_of_study: int
     gender: str
     level_of_study: str
+    first_name: str
+    middle_name: str
+    last_name: str
+    department: str
 
 
 @strawberry.type
@@ -115,6 +119,9 @@ class ReviewTrailType:
         "placement_conducted_site",
         "hr_feedback_for_university",
         "field_records_shared_at",
+        "field_area",
+        "postal_address",
+        "hr_decision_reason",
         "hod_forwarded_at",
         "staff_forwarded_at",
     ],
@@ -179,9 +186,15 @@ class ApplicationType:
     @strawberry.field
     def applicant_student_profile(self, root: Application) -> ApplicantStudentProfileType | None:
         try:
-            sp = StudentProfile.objects.get(user_id=root.applicant_id)
+            sp = StudentProfile.objects.select_related("department_entity").get(user_id=root.applicant_id)
         except StudentProfile.DoesNotExist:
             return None
+        applicant = root.applicant
+        # Derive first/last from User; middle from the profile. Fall back to
+        # splitting full_name when User name fields are blank.
+        parts = (sp.full_name or "").split()
+        first = getattr(applicant, "first_name", "") or (parts[0] if parts else "")
+        last = getattr(applicant, "last_name", "") or (parts[-1] if len(parts) > 1 else "")
         return ApplicantStudentProfileType(
             full_name=sp.full_name,
             registration_no=sp.registration_no,
@@ -190,4 +203,8 @@ class ApplicationType:
             year_of_study=sp.year_of_study,
             gender=sp.gender,
             level_of_study=sp.level_of_study or "",
+            first_name=first,
+            middle_name=sp.middle_name or "",
+            last_name=last,
+            department=getattr(sp.department_entity, "name", "") or "",
         )
