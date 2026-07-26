@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Any
 
@@ -11,6 +12,12 @@ from strawberry.types import Info
 from apps.employees.models import HospitalStaff
 from apps.students.models import StudentProfile
 from apps.users.graphql.auth import require_auth
+from apps.users.services.google_auth import GoogleAuthError, login_with_google as google_login
+from apps.users.services.password_reset import (
+    PasswordResetError,
+    request_password_reset as request_password_reset_service,
+    reset_password as reset_password_service,
+)
 from apps.users.services.staff_credentials import hospital_staff_login_password_ok
 from apps.users.services.student_credentials import (
     student_default_password_from_full_name,
@@ -26,6 +33,8 @@ from apps.users.models import User
 from apps.users.services import provisioning
 from core.constants import UserRole
 from strawberry_django.utils.requests import get_request
+
+logger = logging.getLogger(__name__)
 
 _TENANT_ADMIN_ROLES = {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}
 
@@ -155,6 +164,62 @@ class UsersMutation:
     def social_login(self, info: Info, token: str) -> AuthPayload:
         """Compatibility alias for social sign-in flows that pass the token as `token`."""
         return self.login_with_google(info, token)
+
+    @strawberry.mutation
+    def login_with_google(self, info: Info, credential: str) -> AuthPayload:
+        """Exchange a Google ID token for STUD access/refresh tokens.
+
+        `credential` is the JWT that Google Identity Services hands the browser.
+        It is verified server-side (signature, audience, issuer, expiry) before
+        any user is resolved — see services.google_auth.
+        """
+        try:
+            user = google_login(credential)
+        except GoogleAuthError as exc:
+            raise PermissionDenied(str(exc)) from exc
+
+        return AuthPayload(
+            access_token=issue_access_token(user.pk),
+            refresh_token=issue_refresh_token(user.pk),
+            token_type="Bearer",
+            user=User.objects.get(pk=user.pk),
+        )
+
+    @strawberry.mutation
+    def request_password_reset(self, info: Info, email: str) -> OperationResult:
+        """Email a reset link. Always reports success.
+
+        The response is intentionally identical whether or not the address is
+        registered — a differing reply would turn this into an account-existence
+        oracle for anyone able to guess addresses.
+        """
+        request = get_request(info)
+        ip = None
+        if request is not None:
+            forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+            ip = forwarded.split(",")[0].strip() or request.META.get("REMOTE_ADDR")
+
+        try:
+            request_password_reset_service(email=email, ip=ip)
+        except Exception:  # noqa: BLE001
+            # SMTP failures must not reveal that the address matched an account.
+            logger.exception("Password reset email failed for %r", email)
+
+        return OperationResult(
+            ok=True,
+            message="If an account exists for that address, a reset link is on its way.",
+        )
+
+    @strawberry.mutation
+    def reset_password(self, info: Info, token: str, new_password: str) -> OperationResult:
+        try:
+            reset_password_service(raw_token=token, new_password=new_password)
+        except PasswordResetError as exc:
+            raise ValidationError(str(exc)) from exc
+        return OperationResult(
+            ok=True,
+            message="Password updated. You can now sign in with your new password.",
+        )
 
     @strawberry.mutation
     def change_password(

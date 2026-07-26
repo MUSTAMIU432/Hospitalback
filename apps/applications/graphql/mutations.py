@@ -476,6 +476,7 @@ class StudyRequestsMutation:
         application_id: uuid.UUID,
         placement_conducted_site: str | None = None,
         hr_feedback_for_university: str | None = None,
+        hospital_department_id: str | None = None,
     ) -> ApplicationType:
         editor = require_auth(info)
         app = Application.objects.get(pk=application_id)
@@ -484,6 +485,28 @@ class StudyRequestsMutation:
             editor=editor,
             placement_conducted_site=placement_conducted_site,
             hr_feedback_for_university=hr_feedback_for_university,
+            hospital_department_id=hospital_department_id,
+        )
+        return Application.objects.get(pk=application_id)
+
+    @strawberry.mutation
+    def forward_attachment_to_hod(
+        self,
+        info: Info,
+        application_id: uuid.UUID,
+        hospital_department_id: str,
+        placement_conducted_site: str | None = None,
+        note: str = "",
+    ) -> ApplicationType:
+        """Set the department and forward the approved placement to its HOD, atomically."""
+        editor = require_auth(info)
+        app = Application.objects.get(pk=application_id)
+        workflow.forward_attachment_to_hod(
+            application=app,
+            editor=editor,
+            hospital_department_id=hospital_department_id,
+            placement_conducted_site=placement_conducted_site,
+            note=note,
         )
         return Application.objects.get(pk=application_id)
 

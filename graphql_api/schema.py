@@ -19,6 +19,7 @@ from apps.students.graphql.queries import StudentsQuery
 from apps.users.graphql.mutations import UsersMutation
 from apps.users.graphql.queries import UsersQuery
 
+from graphql_api.chatbot import WorkflowChatMutation
 from graphql_api.core_queries import CoreQuery
 
 Query = merge_types(
@@ -46,6 +47,7 @@ Mutation = merge_types(
         StudyRequestsMutation,
         ImportsMutation,
         NotificationsMutation,
+        WorkflowChatMutation,
     ),
 )
 

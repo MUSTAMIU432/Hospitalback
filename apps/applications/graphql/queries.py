@@ -29,6 +29,18 @@ class StudyRequestsQuery:
         return list(access_svc.applications_in_review_queues(user))
 
     @strawberry.field
+    def department_handoff_queue(self, info: Info) -> list[ApplicationType]:
+        """Approved student attachments handed off to hospital departments."""
+        user = require_auth(info)
+        return list(access_svc.attachment_department_handoffs(user))
+
+    @strawberry.field
+    def hod_approved_field_requests(self, info: Info) -> list[ApplicationType]:
+        """Approved student attachments accepted into this HOD's department(s)."""
+        user = require_auth(info)
+        return list(access_svc.hod_approved_field_requests(user))
+
+    @strawberry.field
     def applications_with_management_final_letters(self, info: Info) -> list[ApplicationType]:
         """
         Applications that have a stored Top Management formal letter (review trail).
