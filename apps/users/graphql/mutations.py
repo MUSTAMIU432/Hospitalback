@@ -1,7 +1,10 @@
 import uuid
+from typing import Any
 
 import strawberry
+import requests
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from strawberry.types import Info
 
@@ -25,6 +28,63 @@ from core.constants import UserRole
 from strawberry_django.utils.requests import get_request
 
 _TENANT_ADMIN_ROLES = {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}
+
+
+def _google_identity_payload(credential: str) -> dict[str, Any] | None:
+    """Verify a Google ID token via Google's tokeninfo endpoint."""
+    if not credential or not getattr(settings, "GOOGLE_CLIENT_ID", None):
+        return None
+
+    try:
+        response = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=5,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+
+    aud = data.get("aud")
+    email = (data.get("email") or "").strip().lower()
+    if not aud or not email:
+        return None
+    if aud != getattr(settings, "GOOGLE_CLIENT_ID"):
+        return None
+    return {"email": email, "name": (data.get("name") or "").strip()}
+
+
+def _authenticate_google_user(credential: str) -> User | None:
+    payload = _google_identity_payload(credential)
+    if not payload:
+        return None
+
+    email = payload["email"]
+    try:
+        user = User.objects.get(email__iexact=email)
+    except User.DoesNotExist:
+        return None
+
+    if not user.is_active:
+        return None
+    return user
+
+
+def _build_auth_payload(user: User) -> AuthPayload:
+    access = issue_access_token(user.pk)
+    refresh = issue_refresh_token(user.pk)
+    user_orm = User.objects.get(pk=user.pk)
+    return AuthPayload(
+        access_token=access,
+        refresh_token=refresh,
+        token_type="Bearer",
+        user=user_orm,
+    )
 
 
 def _require_sysadmin_and_get_admin(info: Info, user_id: uuid.UUID) -> User:
@@ -76,15 +136,25 @@ class UsersMutation:
                     pass
         if user is None or not user.is_active:
             raise PermissionDenied("Invalid credentials.")
-        access = issue_access_token(user.pk)
-        refresh = issue_refresh_token(user.pk)
-        user_orm = User.objects.get(pk=user.pk)
-        return AuthPayload(
-            access_token=access,
-            refresh_token=refresh,
-            token_type="Bearer",
-            user=user_orm,
-        )
+        return _build_auth_payload(user)
+
+    @strawberry.mutation
+    def login_with_google(self, info: Info, credential: str) -> AuthPayload:
+        """Verify a Google ID token and sign the matching user in."""
+        user = _authenticate_google_user(credential.strip())
+        if user is None:
+            raise PermissionDenied("Google sign-in failed for the provided account.")
+        return _build_auth_payload(user)
+
+    @strawberry.mutation
+    def google_login(self, info: Info, credential: str) -> AuthPayload:
+        """Compatibility alias for the frontend's alternative Google mutation name."""
+        return self.login_with_google(info, credential)
+
+    @strawberry.mutation
+    def social_login(self, info: Info, token: str) -> AuthPayload:
+        """Compatibility alias for social sign-in flows that pass the token as `token`."""
+        return self.login_with_google(info, token)
 
     @strawberry.mutation
     def change_password(

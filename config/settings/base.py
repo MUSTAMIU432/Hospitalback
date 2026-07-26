@@ -111,6 +111,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.imports",
     "apps.reports",
+    
 ]
 
 def _cors_origins() -> list[str]:
