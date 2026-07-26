@@ -39,6 +39,18 @@ _CAP_EQUIVALENTS: dict[str, set[str]] = {
     "hod_hub_app_review": {"hod_assess_details", "hod_hub_app_review"},
     "adr_assess_details": {"adr_assess_details", "adr_hub_app_review"},
     "adr_hub_app_review": {"adr_assess_details", "adr_hub_app_review"},
+    # HR field-requests: the enum/module code is `hr_field_requests`, but real HR
+    # users are granted the granular sub-capabilities the admin capability system
+    # creates (view / assess / feedback / hand-off). Without this, the HR review
+    # queue gate (which checks the module code) matches nobody, so submitted
+    # student attachment applications never appear on the HR dashboard.
+    "hr_field_requests": {
+        "hr_field_requests",
+        "hr_view_requests",
+        "hr_assess_request",
+        "hr_feedback_student",
+        "hr_dept_handoff",
+    },
 }
 
 

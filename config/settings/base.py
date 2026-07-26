@@ -119,9 +119,11 @@ def _cors_origins() -> list[str]:
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://localhost:8080,http://127.0.0.1:8080,"
-        # Capacitor / Android WebView origins (mobile APK). With
-        # androidScheme:"http" the app origin is http://localhost.
-        "http://localhost,https://localhost,capacitor://localhost",
+        # Mobile APK WebView origins. Tauri's Android WebView serves the bundled
+        # SPA from http://tauri.localhost; Capacitor with androidScheme:"http"
+        # uses plain http://localhost.
+        "http://localhost,https://localhost,capacitor://localhost,"
+        "http://tauri.localhost,https://tauri.localhost",
     )
     return [o.strip() for o in raw.split(",") if o.strip()]
 
@@ -132,6 +134,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://localhost(:\d+)?$",
     r"^https://localhost(:\d+)?$",
+    r"^https?://tauri\.localhost(:\d+)?$",
     r"^http://127\.0\.0\.1(:\d+)?$",
     r"^capacitor://localhost$",
 ]
@@ -217,6 +220,27 @@ JWT_REFRESH_EXPIRY_DAYS = int(os.environ.get("JWT_REFRESH_EXPIRY_DAYS", "14"))
 # Deprecated: kept for backwards compatibility if code still reads it; access expiry uses JWT_ACCESS_EXPIRY_MINUTES.
 JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", "24"))
 
+# ── Google Sign-In (OAuth 2.0) ───────────────────────────────────────────────
+# Client ID/secret come from Google Cloud Console → Credentials → OAuth client ID
+# (type: Web application). The ID is public and also ships to the SPA as
+# VITE_GOOGLE_CLIENT_ID; the secret must stay server-side.
+#
+# Values are stripped of stray whitespace and a trailing ";" — pasting from the
+# console often carries one, and it silently breaks token verification with
+# `invalid_client`, which is very hard to diagnose from Google's error alone.
+def _clean_env(name: str) -> str:
+    return os.environ.get(name, "").strip().rstrip(";").strip()
+
+
+GOOGLE_CLIENT_ID = _clean_env("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _clean_env("GOOGLE_CLIENT_SECRET")
+GOOGLE_SIGNIN_ENABLED = bool(GOOGLE_CLIENT_ID)
+
+# How long a password-reset link stays valid.
+PASSWORD_RESET_TIMEOUT_MINUTES = int(os.environ.get("PASSWORD_RESET_TIMEOUT_MINUTES", "30"))
+# Base URL of the SPA — used to build the reset link inside the email.
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+
 # ── Email / SMTP ─────────────────────────────────────────────────────────────
 # Set STUD_EMAIL_NOTIFICATIONS=1 in .env to enable email delivery.
 # Configure the SMTP_ vars below (or use Gmail with an App Password).
@@ -237,3 +261,15 @@ DEFAULT_FROM_EMAIL  = os.environ.get(
     EMAIL_HOST_USER or "webmaster@localhost",
 )
 SERVER_EMAIL        = DEFAULT_FROM_EMAIL
+
+# ── AI / workflow chat ───────────────────────────────────────────────────────
+CHATBOT_API_KEY = _clean_env("CHATBOTAPIKEY") or _clean_env("CHATBOT_API_KEY")
+CHATBOT_PROVIDER = os.environ.get("CHATBOT_PROVIDER", "OpenAI").strip() or "OpenAI"
+CHATBOT_API_BASE_URL = os.environ.get("CHATBOT_API_BASE_URL", "https://api.openai.com").strip().rstrip("/")
+CHATBOT_API_PATH = os.environ.get("CHATBOT_API_PATH", "/v1/chat/completions").strip() or "/v1/chat/completions"
+CHATBOT_API_URL = f"{CHATBOT_API_BASE_URL}{CHATBOT_API_PATH if CHATBOT_API_PATH.startswith('/') else '/' + CHATBOT_API_PATH}"
+CHATBOT_MODEL = os.environ.get("CHATBOT_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+CHATBOT_REFERER = os.environ.get("CHATBOT_REFERER", FRONTEND_BASE_URL).strip()
+CHATBOT_TITLE = os.environ.get("CHATBOT_TITLE", "STUD Workflow Assistant").strip()
+CHATBOT_TEMPERATURE = float(os.environ.get("CHATBOT_TEMPERATURE", "0.3"))
+CHATBOT_MAX_TOKENS = int(os.environ.get("CHATBOT_MAX_TOKENS", "500"))

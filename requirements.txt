@@ -4,6 +4,10 @@ strawberry-graphql>=0.220,<1
 strawberry-graphql-django>=0.10,<1
 python-dotenv>=1.0,<2
 PyJWT>=2.8,<3
+# Google Sign-In: verifies the ID token signature against Google's rotating
+# public keys. Pulls in `cryptography`; do not hand-roll this verification.
+google-auth>=2.28,<3
+requests>=2.31,<3
 openpyxl>=3.1,<4
 django-cors-headers>=4.3,<5
 reportlab>=4.0,<5

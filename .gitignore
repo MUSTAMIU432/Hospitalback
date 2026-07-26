@@ -4,3 +4,10 @@ dist
 build
 coverage
 .vscode
+
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc

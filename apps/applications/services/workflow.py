@@ -38,6 +38,20 @@ def _hod_department_ids(user) -> set:
     return {dep} if dep else set()
 
 
+def _applicant_reviewer_level(user) -> int:
+    """Reviewer rank of the applicant: 0 = staff, 1 = HOD, 2 = Assistant Director,
+    3 = Top Management. A reviewer's own further-studies application starts ABOVE
+    their level so it never routes back to themselves."""
+    role = getattr(user, "role", None)
+    if role == UserRole.MANAGEMENT or user_has_staff_capability(user, "top_mgmt_app_review"):
+        return 3
+    if role == UserRole.ASST_DIRECTOR or user_has_staff_capability(user, "adr_hub_app_review"):
+        return 2
+    if role == UserRole.HOD or user_has_staff_capability(user, "hod_hub_app_review"):
+        return 1
+    return 0
+
+
 def _has_target_hod_for_department(department_id) -> bool:
     if DepartmentHodAssignment.objects.filter(department_id=department_id, is_active=True).exists():
         return True
@@ -129,25 +143,40 @@ def submit_application(*, application: Application, user) -> Application:
     application.app_ref = _next_app_ref()
     application.status = ApplicationStatus.SUBMITTED
     application.submitted_at = timezone.now()
+    level = _applicant_reviewer_level(application.applicant) if application.app_type == ApplicationType.FURTHER_STUDIES else 0
     if application.app_type == ApplicationType.FURTHER_STUDIES:
-        applicant_department_id = getattr(
-            getattr(application.applicant, "hospital_staff_profile", None),
-            "department_id",
-            None,
-        )
-        if not applicant_department_id:
-            raise ValidationError("Assign a department to this staff profile before submitting.")
-        has_target_hod = _has_target_hod_for_department(applicant_department_id)
-        if not has_target_hod:
-            raise ValidationError(
-                "No active HOD assignment exists for your department. Contact hospital admin."
+        if level == 0:
+            # Normal staff → starts at HOD; requires a department + active HOD.
+            applicant_department_id = getattr(
+                getattr(application.applicant, "hospital_staff_profile", None),
+                "department_id",
+                None,
             )
-        application.current_stage = ReviewStage.HOD
+            if not applicant_department_id:
+                raise ValidationError("Assign a department to this staff profile before submitting.")
+            if not _has_target_hod_for_department(applicant_department_id):
+                raise ValidationError(
+                    "No active HOD assignment exists for your department. Contact hospital admin."
+                )
+            application.current_stage = ReviewStage.HOD
+        elif level == 1:
+            # HOD applies → skip HOD, start at Assistant Director.
+            application.current_stage = ReviewStage.ASST_DIRECTOR
+        else:
+            # Assistant Director (2) → Top Management; Top Management (3) stays at
+            # its own level. Either way the application lands at MANAGEMENT.
+            application.current_stage = ReviewStage.MANAGEMENT
     else:
         application.current_stage = ReviewStage.HR
     application.save()
+
     if application.app_type == ApplicationType.FURTHER_STUDIES:
-        notify.notify_hod_for_submission(application)
+        if level == 0:
+            notify.notify_hod_for_submission(application)
+        elif level == 1:
+            notify.notify_asst_directors_for_application(application)
+        else:
+            notify.notify_management_for_application(application)
     else:
         notify.notify_hr_for_attachment(application)
     return application
@@ -240,6 +269,11 @@ def review_application(
             raise ValidationError(
                 "Set the confirmed field training site before approving (HR placement step)."
             )
+        if not application.hospital_department_id:
+            raise ValidationError(
+                "Select the hospital department for this placement before approving — "
+                "the approval is forwarded to that department's HOD."
+            )
         application.status = ApplicationStatus.APPROVED
         application.current_stage = ""
         application.field_records_shared_at = timezone.now()
@@ -251,6 +285,8 @@ def review_application(
             notif_type=NotificationType.APPROVAL,
         )
         notify.notify_univ_admins_field_placement(application)
+        # Forward the approved placement to the HOD of the hospital department.
+        notify.notify_hod_for_attachment_placement(application)
         return application
     if stage == ReviewStage.HOD:
         application.status = ApplicationStatus.UNDER_REVIEW
@@ -713,15 +749,88 @@ def set_attachment_placement_fields(
     editor,
     placement_conducted_site: str | None = None,
     hr_feedback_for_university: str | None = None,
+    hospital_department_id=None,
 ) -> Application:
     application = Application.objects.select_for_update().get(pk=application.pk)
     _assert_can_hr_edit_attachment(application, editor)
+    fields = []
     if placement_conducted_site is not None:
         application.placement_conducted_site = placement_conducted_site.strip()
+        fields.append("placement_conducted_site")
     if hr_feedback_for_university is not None:
         application.hr_feedback_for_university = hr_feedback_for_university.strip()
-    application.save(update_fields=["placement_conducted_site", "hr_feedback_for_university"])
+        fields.append("hr_feedback_for_university")
+    if hospital_department_id is not None:
+        from apps.hospital_directory.models import Department
+
+        if hospital_department_id == "":
+            application.hospital_department = None
+        else:
+            try:
+                application.hospital_department = Department.objects.get(pk=hospital_department_id)
+            except Department.DoesNotExist as exc:
+                raise ValidationError("Hospital department not found.") from exc
+        fields.append("hospital_department")
+    if fields:
+        application.save(update_fields=fields)
     return application
+
+
+@transaction.atomic
+def forward_attachment_to_hod(
+    *,
+    application: Application,
+    editor,
+    hospital_department_id,
+    placement_conducted_site: str | None = None,
+    note: str = "",
+) -> Application:
+    """Set the department and forward the approved placement to its HOD, atomically.
+
+    This is the single 'Send to HOD' action. Doing the department set and the
+    approval in one transaction avoids the earlier two-call race, where the
+    placement update and the approval could straddle a stage change and trip
+    'Placement can only be edited while the request is with HR.'
+
+    Idempotent on the happy end-state: if the request is already approved and
+    routed to a department, it's treated as already-sent rather than an error.
+    """
+    application = Application.objects.select_for_update().get(pk=application.pk)
+
+    # Already forwarded — don't error, just report the current record.
+    if (
+        application.status == ApplicationStatus.APPROVED
+        and application.hospital_department_id is not None
+    ):
+        return application
+
+    # Validates HR role + that the request is still at the HR stage.
+    _assert_can_hr_edit_attachment(application, editor)
+
+    from apps.hospital_directory.models import Department
+
+    if not hospital_department_id:
+        raise ValidationError("Select the department to send this student to.")
+    try:
+        application.hospital_department = Department.objects.get(pk=hospital_department_id)
+    except Department.DoesNotExist as exc:
+        raise ValidationError("Hospital department not found.") from exc
+
+    if placement_conducted_site is not None and placement_conducted_site.strip():
+        application.placement_conducted_site = placement_conducted_site.strip()
+
+    if not (application.placement_conducted_site or "").strip():
+        raise ValidationError("Set the field training site before sending to the HOD.")
+
+    application.save(update_fields=["hospital_department", "placement_conducted_site"])
+
+    # Approval is what forwards the placement to the department's HOD.
+    return review_application(
+        application=application,
+        reviewer=editor,
+        decision=ReviewDecision.APPROVED,
+        remarks=note.strip() or "Forwarded to the Head of Department for placement.",
+    )
 
 
 def can_hr_upload_attachment_document(user, application: Application) -> bool:

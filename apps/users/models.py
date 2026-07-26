@@ -50,3 +50,56 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return self.username
+
+
+class PasswordResetToken(models.Model):
+    """A single-use, time-limited password reset grant.
+
+    Only the SHA-256 hash of the token is stored: a leaked database dump must
+    not let an attacker mint working reset links. The raw token exists only in
+    the email we send and in the URL the user clicks.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="password_reset_tokens")
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Recorded for abuse investigation — reset endpoints are a common spray target.
+    requested_ip = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        db_table = "password_reset_tokens"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"reset for {self.user.username} (expires {self.expires_at:%Y-%m-%d %H:%M})"
+
+    @property
+    def is_usable(self) -> bool:
+        from django.utils import timezone
+
+        return self.used_at is None and self.expires_at > timezone.now()
+
+
+class GoogleIdentity(models.Model):
+    """Links a Google account to a STUD user.
+
+    Keyed on Google's `sub` claim, not email: email addresses can be changed or
+    reassigned, `sub` is a stable per-account identifier. Storing it means a
+    user who later changes their Google email still resolves to the same record.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="google_identity")
+    google_sub = models.CharField(max_length=255, unique=True, db_index=True)
+    email = models.EmailField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_login_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "google_identities"
+
+    def __str__(self) -> str:
+        return f"{self.user.username} ↔ {self.email}"

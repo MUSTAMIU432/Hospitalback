@@ -219,6 +219,36 @@ def notify_hod_for_submission(application) -> None:
     )
 
 
+def notify_hod_for_attachment_placement(application) -> None:
+    """On HR approval of a student field placement, notify the HOD of the hospital
+    department the student is placed in (IT / Nursing / Dentist / Pharmacy …)."""
+    dept_id = getattr(application, "hospital_department_id", None)
+    if not dept_id:
+        return
+    ref = application.app_ref or str(application.id)
+    assignment_hod_ids = list(
+        DepartmentHodAssignment.objects.filter(
+            department_id=dept_id, is_active=True
+        ).values_list("hod_user_id", flat=True)
+    )
+    fallback_hod_ids = list(
+        HospitalStaff.objects.filter(
+            user__role=UserRole.HOD, user__is_active=True, department_id=dept_id
+        ).values_list("user_id", flat=True)
+    )
+    hod_ids = set(assignment_hod_ids + fallback_hod_ids)
+    User = get_user_model()
+    recipients = list(User.objects.filter(id__in=hod_ids, is_active=True))
+    if not recipients:
+        return
+    notify_users(
+        recipients=recipients,
+        message=f"Student field placement {ref} was approved by HR and assigned to your department.",
+        notif_type=NotificationType.APPROVAL,
+        destination_path="/reviewer/field-requests",
+    )
+
+
 def _users_with_capability(capability: str):
     from apps.employees.services.capabilities import users_with_staff_capability
     return users_with_staff_capability(capability)

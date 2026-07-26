@@ -137,6 +137,59 @@ def field_placements_visible_to_university() -> QuerySet[Application]:
     ).order_by("-field_records_shared_at")
 
 
+def attachment_department_handoffs(user) -> QuerySet[Application]:
+    """Approved student attachments assigned to a hospital department.
+
+    These are the students HR has accepted and handed off to a department's HOD
+    (`review_application` sets status=APPROVED + a hospital_department and calls
+    `notify_hod_for_attachment_placement`). This is the 'Department handoff' list
+    — distinct from the raw HR review queue of applications still awaiting HR.
+
+    Same HR gate as the review queue, so both HR nav items share visibility.
+    """
+    role = getattr(user, "role", None)
+    is_hr = role == UserRole.HOSPITAL_ADMIN or user_has_staff_capability(
+        user, StaffCapability.HR_FIELD_REQUESTS.value
+    )
+    if not is_hr:
+        return Application.objects.none()
+    return (
+        Application.objects.filter(
+            app_type=ApplicationType.ATTACHMENT,
+            status=ApplicationStatus.APPROVED,
+            hospital_department__isnull=False,
+        )
+        .select_related("applicant", "hospital_department")
+        .order_by("-field_records_shared_at", "-updated_at")
+    )
+
+
+def hod_approved_field_requests(user) -> QuerySet[Application]:
+    """Approved student attachments accepted into THIS HOD's department(s).
+
+    The HR 'Department handoff' forwards each approved placement to the hospital
+    department's HOD; this is that HOD's inbound view of the students assigned to
+    their department. Scoped to the HOD's own department(s) — not hospital-wide.
+    """
+    is_hod = getattr(user, "role", None) == UserRole.HOD or user_has_staff_capability(
+        user, "hod_view_hr_approved"
+    )
+    if not is_hod:
+        return Application.objects.none()
+    dept_ids = _hod_department_ids(user)
+    if not dept_ids:
+        return Application.objects.none()
+    return (
+        Application.objects.filter(
+            app_type=ApplicationType.ATTACHMENT,
+            status=ApplicationStatus.APPROVED,
+            hospital_department_id__in=dept_ids,
+        )
+        .select_related("applicant", "hospital_department")
+        .order_by("-field_records_shared_at", "-updated_at")
+    )
+
+
 def can_view_application(user, application: Application) -> bool:
     if not user.is_authenticated:
         return False
@@ -170,6 +223,13 @@ def can_view_application(user, application: Application) -> bool:
         )
     is_hod_reviewer = role == UserRole.HOD or user_has_staff_capability(user, "hod_assess_details")
     if is_hod_reviewer:
+        # Approved student attachments accepted into this HOD's department are
+        # viewable (the 'Approved student field requests' inbound list).
+        if application.app_type == ApplicationType.ATTACHMENT:
+            return (
+                application.status == ApplicationStatus.APPROVED
+                and application.hospital_department_id in _hod_department_ids(user)
+            )
         if application.app_type != ApplicationType.FURTHER_STUDIES:
             return False
         applicant_department_id = getattr(
@@ -185,9 +245,21 @@ def can_view_application(user, application: Application) -> bool:
     ):
         if application.app_type != ApplicationType.ATTACHMENT:
             return False
-        return application.status in (
-            ApplicationStatus.SUBMITTED,
-            ApplicationStatus.RETURNED,
-            ApplicationStatus.UNDER_REVIEW,
-        ) and application.current_stage == ReviewStage.HR
+        # In the HR review queue (awaiting HR at the HR stage)…
+        if (
+            application.status
+            in (
+                ApplicationStatus.SUBMITTED,
+                ApplicationStatus.RETURNED,
+                ApplicationStatus.UNDER_REVIEW,
+            )
+            and application.current_stage == ReviewStage.HR
+        ):
+            return True
+        # …or already approved and handed off to a department (Department handoff
+        # list). HR must still be able to open these to review the placement.
+        return (
+            application.status == ApplicationStatus.APPROVED
+            and application.hospital_department_id is not None
+        )
     return False
