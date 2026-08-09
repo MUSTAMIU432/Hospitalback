@@ -11,3 +11,6 @@ coverage
 !.env.example
 __pycache__/
 *.pyc
+
+# Django collectstatic output (regenerated on every build/deploy)
+staticfiles/
