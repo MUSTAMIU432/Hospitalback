@@ -86,12 +86,16 @@ def resolve_user_for_google(profile: GoogleProfile) -> User:
     Resolution order:
       1. A previously linked GoogleIdentity (stable, survives email changes).
       2. An existing user whose email matches — first-time link.
+      3. Nobody matches → provision a new **student** account from the token's
+         verified claims (given_name / family_name / email).
 
-    Self-registration is intentionally NOT handled here. Accounts carry a role,
-    module and capability set that decide what the user can see; minting one
-    from a Google login would create a user with no meaningful authorisation.
-    Until Section 3's registration flow exists, an unknown Google account is
-    rejected rather than silently granted access.
+    Step 3 is safe specifically because the new account is a student and
+    nothing else. Roles, modules and capabilities are what decide who can see
+    a reviewer queue or an admin console; a self-provisioned account gets the
+    lowest-privilege role in the system and an empty StudentProfile gate, so it
+    can reach its own workspace and nothing more. Staff, reviewers and admins
+    are still provisioned exclusively by an administrator — an existing staff
+    member signing in with Google matches at step 2 and keeps their real role.
     """
     identity = (
         GoogleIdentity.objects.select_related("user").filter(google_sub=profile.sub).first()
@@ -106,10 +110,22 @@ def resolve_user_for_google(profile: GoogleProfile) -> User:
 
     user = User.objects.filter(email__iexact=profile.email).first()
     if not user:
-        raise GoogleAuthError(
-            "No STUD account is registered for this Google address. "
-            "Contact your administrator to have an account created."
+        # Imported lazily: registration imports nothing from this module, but
+        # keeping the edge one-directional means neither can grow into a cycle.
+        from apps.users.services.registration import (
+            RegistrationError,
+            provision_student_from_google,
         )
+
+        try:
+            return provision_student_from_google(
+                google_sub=profile.sub,
+                email=profile.email,
+                first_name=profile.first_name,
+                last_name=profile.last_name,
+            )
+        except RegistrationError as exc:
+            raise GoogleAuthError(str(exc)) from exc
     if not user.is_active:
         raise GoogleAuthError("This account is inactive.")
 

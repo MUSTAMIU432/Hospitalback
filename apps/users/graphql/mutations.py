@@ -1,4 +1,8 @@
+import base64
+import binascii
+import io
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -7,16 +11,24 @@ import requests
 from django.contrib.auth import authenticate
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.base import ContentFile
+from django.utils import timezone
+from PIL import Image
 from strawberry.types import Info
 
 from apps.employees.models import HospitalStaff
 from apps.students.models import StudentProfile
 from apps.users.graphql.auth import require_auth
 from apps.users.services.google_auth import GoogleAuthError, login_with_google as google_login
+from apps.users.services.registration import (
+    RegistrationError,
+    register_student as register_student_service,
+)
 from apps.users.services.password_reset import (
     PasswordResetError,
     request_password_reset as request_password_reset_service,
     reset_password as reset_password_service,
+    verify_reset_code as verify_reset_code_service,
 )
 from apps.users.services.staff_credentials import hospital_staff_login_password_ok
 from apps.users.services.student_credentials import (
@@ -35,6 +47,9 @@ from core.constants import UserRole
 from strawberry_django.utils.requests import get_request
 
 logger = logging.getLogger(__name__)
+
+PROFILE_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024
 
 _TENANT_ADMIN_ROLES = {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}
 
@@ -110,8 +125,45 @@ def _require_sysadmin_and_get_admin(info: Info, user_id: uuid.UUID) -> User:
     return target
 
 
+@strawberry.input
+class RegisterStudentInput:
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+
+
 @strawberry.type
 class UsersMutation:
+    @strawberry.mutation
+    def register_student(self, info: Info, data: RegisterStudentInput) -> AuthPayload:
+        """Public student self-registration.
+
+        Unauthenticated by design — this is the door into the platform for a
+        student nobody has provisioned. It returns a full AuthPayload rather
+        than an OperationResult so signup logs them straight in; the account
+        they land in is gated by `profileComplete` until they fill in their
+        registration number and course details.
+
+        Only ever mints a STUDENT. There is no role parameter to tamper with.
+        """
+        try:
+            user = register_student_service(
+                first_name=data.first_name,
+                last_name=data.last_name,
+                email=data.email,
+                password=data.password,
+            )
+        except RegistrationError as exc:
+            raise ValidationError(str(exc)) from exc
+
+        return AuthPayload(
+            access_token=issue_access_token(user.pk),
+            refresh_token=issue_refresh_token(user.pk),
+            token_type="Bearer",
+            user=user,
+        )
+
     @strawberry.mutation
     def login(self, info: Info, username: str, password: str) -> AuthPayload:
         username = username.strip()
@@ -187,7 +239,7 @@ class UsersMutation:
 
     @strawberry.mutation
     def request_password_reset(self, info: Info, email: str) -> OperationResult:
-        """Email a reset link. Always reports success.
+        """Email a one-time reset code. Always reports success.
 
         The response is intentionally identical whether or not the address is
         registered — a differing reply would turn this into an account-existence
@@ -207,13 +259,25 @@ class UsersMutation:
 
         return OperationResult(
             ok=True,
-            message="If an account exists for that address, a reset link is on its way.",
+            message="If an account exists for that address, a reset code is on its way.",
         )
 
     @strawberry.mutation
-    def reset_password(self, info: Info, token: str, new_password: str) -> OperationResult:
+    def verify_password_reset_code(self, info: Info, email: str, code: str) -> OperationResult:
+        """Check the code before showing the new-password step, so a mistyped
+        code is caught immediately instead of after the user picks a password."""
         try:
-            reset_password_service(raw_token=token, new_password=new_password)
+            verify_reset_code_service(email=email, code=code)
+        except PasswordResetError as exc:
+            raise ValidationError(str(exc)) from exc
+        return OperationResult(ok=True, message="Code verified. Choose a new password.")
+
+    @strawberry.mutation
+    def reset_password(
+        self, info: Info, email: str, code: str, new_password: str
+    ) -> OperationResult:
+        try:
+            reset_password_service(email=email, code=code, new_password=new_password)
         except PasswordResetError as exc:
             raise ValidationError(str(exc)) from exc
         return OperationResult(
@@ -242,6 +306,59 @@ class UsersMutation:
         user.is_first_login = False
         user.save(update_fields=["password", "is_first_login"])
         return OperationResult(ok=True, message="Password updated.")
+
+    @strawberry.mutation
+    def upload_profile_photo(
+        self,
+        info: Info,
+        filename: str,
+        file_base64: str,
+    ) -> UserType:
+        """Replace the signed-in user's profile picture.
+
+        The image arrives base64-encoded over GraphQL, matching how application
+        documents are uploaded — no multipart endpoint to authenticate separately.
+        """
+        user = require_auth(info)
+
+        ext = os.path.splitext(filename or "")[1].lower()
+        if ext not in PROFILE_PHOTO_EXTENSIONS:
+            raise ValidationError("Use a JPG, PNG or WEBP image.")
+
+        try:
+            raw = base64.b64decode(file_base64 or "", validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValidationError("Could not read that image.") from exc
+        if not raw:
+            raise ValidationError("The image is empty.")
+        if len(raw) > PROFILE_PHOTO_MAX_BYTES:
+            raise ValidationError(
+                f"Image is too large (max {PROFILE_PHOTO_MAX_BYTES // (1024 * 1024)}MB)."
+            )
+
+        # Verify it really is an image before it lands in MEDIA_ROOT.
+        try:
+            probe = Image.open(io.BytesIO(raw))
+            probe.verify()
+        except Exception as exc:  # noqa: BLE001 — any decode failure means "not an image"
+            raise ValidationError("That file is not a valid image.") from exc
+
+        # Drop the previous file so replacements do not pile up on disk.
+        if user.photo:
+            user.photo.delete(save=False)
+
+        stored_name = f"photo-{int(timezone.now().timestamp())}{ext}"
+        user.photo.save(stored_name, ContentFile(raw), save=True)
+        return User.objects.get(pk=user.pk)
+
+    @strawberry.mutation
+    def remove_profile_photo(self, info: Info) -> UserType:
+        user = require_auth(info)
+        if user.photo:
+            user.photo.delete(save=False)
+            user.photo = None
+            user.save(update_fields=["photo"])
+        return User.objects.get(pk=user.pk)
 
     @strawberry.mutation
     def create_tenant_admin(

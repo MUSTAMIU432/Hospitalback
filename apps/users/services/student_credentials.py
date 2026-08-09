@@ -52,4 +52,12 @@ def student_login_password_ok(*, user: User, profile: StudentProfile, password: 
         return False
     if user.check_password(password):
         return True
+    # The first-name fallback exists so an admin-provisioned student can get in
+    # with the credentials their administrator read out to them. It must not
+    # outlive that moment: once `is_first_login` is False the account has a
+    # password its owner chose (self-registration sets it False at creation),
+    # and continuing to accept the given name would mean anyone who knows a
+    # registration number and a first name can sign in as that student.
+    if not user.is_first_login:
+        return False
     return student_default_password_matches_plain(profile=profile, user=user, password=password)

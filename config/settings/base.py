@@ -1,4 +1,5 @@
 import os
+import socket
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -87,11 +88,46 @@ def _database_from_url(url: str) -> dict:
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+
+
+def _local_ipv4s() -> list[str]:
+    """This machine's own LAN addresses.
+
+    Phones reach the API at http://<this machine>:8000, and that address changes
+    with every network and DHCP lease. Pinning it in .env means the API starts
+    answering 400 DisallowedHost the moment the lease changes — the request never
+    reaches a view, so the symptom on the phone is a working app that can never
+    connect. Asking the OS removes the pin.
+
+    Connecting a UDP socket sends no packets; it only makes the kernel choose the
+    interface it would route through.
+    """
+    found: list[str] = []
+    for target in ("8.8.8.8:80", "224.0.0.1:80"):
+        host, port = target.split(":")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((host, int(port)))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127.") and ip not in found:
+                found.append(ip)
+        except OSError:
+            pass
+        finally:
+            sock.close()
+    return found
+
+
 ALLOWED_HOSTS = [
     h.strip()
     for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
+# Always trust our own addresses, whatever .env happens to say. Without this a
+# stale DJANGO_ALLOWED_HOSTS silently breaks every phone on the network.
+for _ip in _local_ipv4s():
+    if _ip not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_ip)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -111,7 +147,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.imports",
     "apps.reports",
-    
+    "apps.chatbot",
 ]
 
 def _cors_origins() -> list[str]:
@@ -130,6 +166,13 @@ def _cors_origins() -> list[str]:
 
 
 CORS_ALLOWED_ORIGINS = _cors_origins()
+# A phone browsing the Vite dev server does so from http://<lan-ip>:5173, which
+# a pinned .env list will not contain after the address changes.
+for _ip in _local_ipv4s():
+    for _port in ("3000", "5173", "5174", "8000", "8080"):
+        _origin = f"http://{_ip}:{_port}"
+        if _origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOW_CREDENTIALS = True
 # Allow any localhost:PORT and capacitor origins (covers WebView quirks in dev).
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -139,6 +182,15 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://127\.0\.0\.1(:\d+)?$",
     r"^capacitor://localhost$",
 ]
+
+if DEBUG:
+    # Development on a LAN: any private-range origin may call the API. Scoped to
+    # DEBUG so a production deployment keeps the explicit allow-list above.
+    CORS_ALLOWED_ORIGIN_REGEXES += [
+        r"^http://192\.168\.\d{1,3}\.\d{1,3}(:\d+)?$",
+        r"^http://10\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$",
+        r"^http://172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}(:\d+)?$",
+    ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -264,12 +316,24 @@ DEFAULT_FROM_EMAIL  = os.environ.get(
 SERVER_EMAIL        = DEFAULT_FROM_EMAIL
 
 # ── AI / workflow chat ───────────────────────────────────────────────────────
-CHATBOT_API_KEY = _clean_env("CHATBOTAPIKEY") or _clean_env("CHATBOT_API_KEY")
-CHATBOT_PROVIDER = os.environ.get("CHATBOT_PROVIDER", "OpenAI").strip() or "OpenAI"
-CHATBOT_API_BASE_URL = os.environ.get("CHATBOT_API_BASE_URL", "https://api.openai.com").strip().rstrip("/")
+# Groq is the default provider (OpenAI-compatible endpoint): set GROQ_API_KEY in
+# .env. Any other compatible provider works by overriding the URL/model vars.
+# The key stays server-side — the SPA only ever calls our own GraphQL mutation.
+GROQ_API_KEY = _clean_env("GROQ_API_KEY")
+CHATBOT_API_KEY = GROQ_API_KEY or _clean_env("CHATBOTAPIKEY") or _clean_env("CHATBOT_API_KEY")
+_chatbot_on_groq = bool(GROQ_API_KEY)
+CHATBOT_PROVIDER = (
+    os.environ.get("CHATBOT_PROVIDER", "Groq" if _chatbot_on_groq else "OpenAI").strip()
+    or "Groq"
+)
+CHATBOT_API_BASE_URL = os.environ.get(
+    "CHATBOT_API_BASE_URL",
+    "https://api.groq.com/openai" if _chatbot_on_groq else "https://api.openai.com",
+).strip().rstrip("/")
 CHATBOT_API_PATH = os.environ.get("CHATBOT_API_PATH", "/v1/chat/completions").strip() or "/v1/chat/completions"
 CHATBOT_API_URL = f"{CHATBOT_API_BASE_URL}{CHATBOT_API_PATH if CHATBOT_API_PATH.startswith('/') else '/' + CHATBOT_API_PATH}"
-CHATBOT_MODEL = os.environ.get("CHATBOT_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+_default_model = "llama-3.3-70b-versatile" if _chatbot_on_groq else "gpt-4o-mini"
+CHATBOT_MODEL = os.environ.get("CHATBOT_MODEL", _default_model).strip() or _default_model
 CHATBOT_REFERER = os.environ.get("CHATBOT_REFERER", FRONTEND_BASE_URL).strip()
 CHATBOT_TITLE = os.environ.get("CHATBOT_TITLE", "STUD Workflow Assistant").strip()
 CHATBOT_TEMPERATURE = float(os.environ.get("CHATBOT_TEMPERATURE", "0.3"))

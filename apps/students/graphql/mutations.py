@@ -4,7 +4,10 @@ import strawberry
 from django.core.exceptions import PermissionDenied, ValidationError
 from strawberry.types import Info
 
-from apps.students.graphql.inputs import CreateStudentInput
+from apps.students.graphql.inputs import CompleteStudentProfileInput, CreateStudentInput
+from apps.students.services.self_profile import (
+    complete_student_profile as complete_student_profile_service,
+)
 from apps.students.graphql.types import StudentProfileType, UniversityDepartmentType, UniversityFacultyType
 from apps.students.models import StudentProfile, UniversityDepartment, UniversityFaculty
 from apps.users.graphql.auth import require_auth
@@ -30,6 +33,36 @@ def _require_student_manager(info: Info):
 
 @strawberry.type
 class StudentsMutation:
+    @strawberry.mutation
+    def complete_student_profile(
+        self, info: Info, data: CompleteStudentProfileInput
+    ) -> StudentProfileType:
+        """Fill in the caller's own student profile after self-registration.
+
+        Authenticated but deliberately *not* behind `_require_student_manager`:
+        the whole point is that the subject is the caller. The service refuses
+        any caller who is not a student, and refuses to overwrite a profile that
+        already exists — so this cannot be used to edit an admin-created record.
+        """
+        acting = require_auth(info)
+        return complete_student_profile_service(
+            user=acting,
+            registration_no=data.registration_no,
+            full_name=data.full_name,
+            programme=data.programme,
+            faculty=data.faculty,
+            year_of_study=data.year_of_study,
+            phone=data.phone,
+            dob=data.dob,
+            university=data.university,
+            gender=data.gender,
+            level_of_study=data.level_of_study,
+            middle_name=data.middle_name,
+            contact_email=data.contact_email,
+            faculty_entity_id=data.faculty_entity_id,
+            department_entity_id=data.department_entity_id,
+        )
+
     @strawberry.mutation
     def create_student(self, info: Info, data: CreateStudentInput) -> UserType:
         acting = require_auth(info)

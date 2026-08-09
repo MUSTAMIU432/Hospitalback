@@ -4,6 +4,8 @@ import strawberry
 from strawberry.tools import merge_types
 
 from apps.applications.graphql.mutations import StudyRequestsMutation
+from apps.chatbot.graphql.mutations import ChatbotMutation
+from apps.chatbot.graphql.queries import ChatbotQuery
 from apps.applications.graphql.queries import StudyRequestsQuery
 from apps.employees.graphql.mutations import HospitalStaffMutation
 from apps.employees.graphql.queries import HospitalStaffQuery
@@ -19,7 +21,6 @@ from apps.students.graphql.queries import StudentsQuery
 from apps.users.graphql.mutations import UsersMutation
 from apps.users.graphql.queries import UsersQuery
 
-from graphql_api.chatbot import WorkflowChatMutation
 from graphql_api.core_queries import CoreQuery
 
 Query = merge_types(
@@ -34,6 +35,7 @@ Query = merge_types(
         NotificationsQuery,
         ImportsQuery,
         ReportsQuery,
+        ChatbotQuery,
     ),
 )
 
@@ -47,7 +49,7 @@ Mutation = merge_types(
         StudyRequestsMutation,
         ImportsMutation,
         NotificationsMutation,
-        WorkflowChatMutation,
+        ChatbotMutation,
     ),
 )
 

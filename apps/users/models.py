@@ -7,6 +7,12 @@ from django.utils.translation import gettext_lazy as _
 from core.constants import UserModule, UserRole
 
 
+def profile_photo_upload_to(instance: "User", filename: str) -> str:
+    """One folder per user so replacing a photo never collides with another's."""
+    safe = filename.replace("..", "").replace("/", "_")
+    return f"profile-photos/{instance.pk}/{safe}"
+
+
 class User(AbstractUser):
     """Central authentication record (STUD spec)."""
 
@@ -28,6 +34,12 @@ class User(AbstractUser):
         default=UserModule.FURTHER_STUDIES,
     )
     is_first_login = models.BooleanField(default=True)
+    photo = models.ImageField(
+        upload_to=profile_photo_upload_to,
+        blank=True,
+        null=True,
+        help_text=_("Profile picture shown in the header and on the account page."),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -55,9 +67,9 @@ class User(AbstractUser):
 class PasswordResetToken(models.Model):
     """A single-use, time-limited password reset grant.
 
-    Only the SHA-256 hash of the token is stored: a leaked database dump must
-    not let an attacker mint working reset links. The raw token exists only in
-    the email we send and in the URL the user clicks.
+    Only the SHA-256 hash of `email:code` is stored: a leaked database dump must
+    not let an attacker replay a reset. The six-digit code exists only in the
+    email we send and in what the user types back.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -65,6 +77,10 @@ class PasswordResetToken(models.Model):
     token_hash = models.CharField(max_length=64, unique=True, db_index=True)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Wrong-code submissions against this grant; the code burns at the limit.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     # Recorded for abuse investigation — reset endpoints are a common spray target.
     requested_ip = models.GenericIPAddressField(null=True, blank=True)

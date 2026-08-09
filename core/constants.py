@@ -98,3 +98,9 @@ class PlacementScope(models.TextChoices):
     """Attachment / placement request: cohort vs single student."""
     INDIVIDUAL = "individual", "Individual"
     GROUP = "group", "Group"
+
+
+class ProgrammeDurationUnit(models.TextChoices):
+    """Unit the further-studies programme length is expressed in."""
+    MONTHS = "months", "Months"
+    YEARS = "years", "Years"

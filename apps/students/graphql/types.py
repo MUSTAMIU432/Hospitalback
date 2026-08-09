@@ -23,6 +23,9 @@ class UniversityDepartmentType:
         "id",
         "registration_no",
         "full_name",
+        # Exposed so the attachment application form can prefill the student's
+        # three name parts from the profile rather than asking again.
+        "middle_name",
         "programme",
         "faculty",
         "year_of_study",

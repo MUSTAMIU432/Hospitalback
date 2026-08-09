@@ -26,6 +26,7 @@ from core.constants import (
     ApplicationType as ApplicationTypeEnum,
     NotificationType,
     PlacementScope,
+    ProgrammeDurationUnit,
     ReviewDecision,
     UserRole,
 )
@@ -153,6 +154,20 @@ class StudyRequestsMutation:
             val = payload[name]
             if val is not None:
                 setattr(app, name, val)
+
+        # Programme duration is a value+unit pair, handled outside the generic loop
+        # so the applicant can also clear it (the loop skips None).
+        if data.programme_duration_unit is not None:
+            unit = data.programme_duration_unit.strip()
+            if unit and unit not in {
+                ProgrammeDurationUnit.MONTHS,
+                ProgrammeDurationUnit.YEARS,
+            }:
+                raise ValidationError("programme_duration_unit must be months or years.")
+            app.programme_duration_unit = unit
+            app.programme_duration_value = data.programme_duration_value or None
+        elif data.programme_duration_value is not None:
+            app.programme_duration_value = data.programme_duration_value or None
 
         # Student identity fields are prefilled from the profile but editable on
         # the field-attachment form — persist any changes back to the profile/user.

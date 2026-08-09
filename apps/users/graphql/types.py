@@ -25,10 +25,38 @@ from core.constants import UserRole
 )
 class UserType:
     @strawberry.field
+    def photo_url(self, root: User) -> str:
+        """Media path of the profile picture, or "" when none is set.
+
+        Returned as a path (not an absolute URL) to match how the SPA already
+        resolves application documents against the backend origin.
+        """
+        photo = getattr(root, "photo", None)
+        if not photo:
+            return ""
+        try:
+            return photo.url
+        except ValueError:
+            return ""
+
+    @strawberry.field
     def staff_capabilities(self, root: User) -> list[str]:
         from apps.employees.services.capabilities import staff_capabilities_for_user
 
         return staff_capabilities_for_user(root)
+
+    @strawberry.field
+    def profile_complete(self, root: User) -> bool:
+        """False only for a student who has not filled in their StudentProfile yet.
+
+        Lives on the user rather than behind its own query so the SPA learns it
+        from the `me` / `login` payload it already fetches — the profile gate can
+        then redirect on the first render, with no second round-trip and no
+        flash of the dashboard before the redirect lands.
+        """
+        from apps.students.services.self_profile import profile_is_complete
+
+        return profile_is_complete(root)
 
     @strawberry.field
     def profile_title(self, root: User) -> str:

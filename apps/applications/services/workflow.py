@@ -465,6 +465,7 @@ def render_review_feedback_letter_template_html(
             "applicant_name": applicant_name,
             "institution_name": application.institution_name or "",
             "programme_applied": application.programme_applied or "",
+            "programme_duration": application.programme_duration_display,
             "signer_placeholder": ph,
         },
     )

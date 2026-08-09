@@ -109,6 +109,8 @@ class ReviewTrailType:
         "programme_applied",
         "start_date",
         "end_date",
+        "programme_duration_value",
+        "programme_duration_unit",
         "sponsorship_type",
         "reason_for_study",
         "attachment_dept",
@@ -127,6 +129,11 @@ class ReviewTrailType:
     ],
 )
 class ApplicationType:
+    @strawberry_django.field()
+    def programme_duration_display(self, root: Application) -> str:
+        """Human-readable duration ("2 years") for tables, letters and PDFs."""
+        return root.programme_duration_display
+
     @strawberry_django.field()
     def hospital_department(self, root: Application) -> DepartmentType | None:
         if root.hospital_department_id is None:

@@ -16,6 +16,8 @@ class ApplicationUpdateInput:
     programme_applied: str | None = None
     start_date: date | None = None
     end_date: date | None = None
+    programme_duration_value: int | None = None
+    programme_duration_unit: str | None = None
     sponsorship_type: str | None = None
     reason_for_study: str | None = None
     attachment_dept: str | None = None

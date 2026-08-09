@@ -25,6 +25,24 @@ class StudentsQuery:
         return list(StudentProfile.objects.select_related("user", "supervisor").all()[:500])
 
     @strawberry.field
+    def my_student_profile(self, info: Info) -> StudentProfileType | None:
+        """The caller's own student profile, or null if they have not filled it in.
+
+        Nullable rather than erroring: "no profile yet" is the normal state for
+        a freshly self-registered student, not a failure.
+        """
+        user = require_auth(info)
+        if getattr(user, "role", None) != UserRole.STUDENT:
+            return None
+        return (
+            StudentProfile.objects.select_related(
+                "user", "supervisor", "faculty_entity", "department_entity"
+            )
+            .filter(user=user)
+            .first()
+        )
+
+    @strawberry.field
     def university_faculties(self, info: Info, active_only: bool = True) -> list[UniversityFacultyType]:
         require_auth(info)
         qs = UniversityFaculty.objects.all()

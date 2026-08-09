@@ -10,6 +10,7 @@ from core.constants import (
     ApplicationStatus,
     ApplicationType,
     PlacementScope,
+    ProgrammeDurationUnit,
     ReviewStage,
 )
 
@@ -56,6 +57,18 @@ class Application(models.Model):
     programme_applied = models.CharField(max_length=200, blank=True, default="")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    programme_duration_value = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Length of the further-studies programme, counted in programme_duration_unit.",
+    )
+    programme_duration_unit = models.CharField(
+        max_length=10,
+        blank=True,
+        default="",
+        choices=ProgrammeDurationUnit.choices,
+        help_text="months | years — unit for programme_duration_value.",
+    )
     sponsorship_type = models.CharField(max_length=100, blank=True, default="")
     reason_for_study = models.TextField(blank=True, default="")
     attachment_dept = models.CharField(
@@ -138,6 +151,16 @@ class Application(models.Model):
     def __str__(self) -> str:
         return self.app_ref or str(self.id)
 
+    @property
+    def programme_duration_display(self) -> str:
+        """e.g. "2 years", "18 months" — empty when the applicant left it blank."""
+        if not self.programme_duration_value or not self.programme_duration_unit:
+            return ""
+        label = ProgrammeDurationUnit(self.programme_duration_unit).label.lower()
+        if self.programme_duration_value == 1:
+            label = label.rstrip("s")
+        return f"{self.programme_duration_value} {label}"
+
     def clean(self) -> None:
         super().clean()
         terminal = {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED}
@@ -151,6 +174,15 @@ class Application(models.Model):
                     raise ValidationError(
                         {"current_stage": "Invalid stage for further studies pipeline."}
                     )
+            # Duration is stored as value + unit; one without the other cannot be rendered.
+            if self.programme_duration_value and not self.programme_duration_unit:
+                raise ValidationError(
+                    {"programme_duration_unit": "Select months or years for the programme duration."}
+                )
+            if self.programme_duration_unit and not self.programme_duration_value:
+                raise ValidationError(
+                    {"programme_duration_value": "Enter how long the programme runs for."}
+                )
         elif self.app_type == ApplicationType.ATTACHMENT:
             if self.status not in terminal:
                 if not self.current_stage:
