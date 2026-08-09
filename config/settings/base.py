@@ -1,7 +1,7 @@
 import os
 import socket
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values, load_dotenv
@@ -63,6 +63,15 @@ def _database_password(parsed_password: str | None) -> str:
     return ""
 
 
+# libpq/psycopg connection keywords we accept from the DATABASE_URL query string
+# (e.g. Render/Heroku append ?sslmode=require). Anything else is ignored so an
+# unknown query param can't crash psycopg with an unexpected keyword.
+_PASSTHROUGH_DB_PARAMS = frozenset({
+    "sslmode", "sslrootcert", "sslcert", "sslkey", "target_session_attrs",
+    "application_name", "options",
+})
+
+
 def _database_from_url(url: str) -> dict:
     _require_postgres_url(url)
     parsed = urlparse(url.strip())
@@ -72,6 +81,18 @@ def _database_from_url(url: str) -> dict:
     host = (os.environ.get("DATABASE_HOST") or "").strip() or (parsed.hostname or "localhost")
     port = (os.environ.get("DATABASE_PORT") or "").strip() or str(parsed.port or 5432)
     name = (os.environ.get("DATABASE_NAME") or "").strip() or path
+
+    options = {"connect_timeout": int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))}
+    # Honour libpq params from the URL query (?sslmode=require etc.) — without this
+    # a managed host that mandates SSL would be reached with the driver's default.
+    for key, values in parse_qs(parsed.query).items():
+        if key in _PASSTHROUGH_DB_PARAMS and values:
+            options[key] = values[0]
+    # Explicit override always wins over whatever the URL carried.
+    sslmode_env = (os.environ.get("DATABASE_SSLMODE") or "").strip()
+    if sslmode_env:
+        options["sslmode"] = sslmode_env
+
     return {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": name,
@@ -80,9 +101,7 @@ def _database_from_url(url: str) -> dict:
         "HOST": host,
         "PORT": port,
         "CONN_MAX_AGE": int(os.environ.get("DATABASE_CONN_MAX_AGE", "0")),
-        "OPTIONS": {
-            "connect_timeout": int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10")),
-        },
+        "OPTIONS": options,
     }
 
 
