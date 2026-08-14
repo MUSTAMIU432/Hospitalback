@@ -140,6 +140,10 @@ def build_prompt(spec: FieldSpec, context: dict[str, str], instruction: str, exi
             "Hard rules:",
             "- Use ONLY the details supplied below. Never invent names, dates, grades, institutions "
             "or policies, and never write a placeholder like [Name] — omit what you were not given.",
+            # A name is not a statement of gender. Guessing one puts an invented
+            # personal detail into an HR record that follows the person around.
+            "- Never infer anyone's gender from their name. Refer to a person by name, or by their "
+            "role, or as \"they\" — never \"he\" or \"she\" unless the details below state it.",
             f"- Length: {spec.words}. Plain prose, no headings, no bullet points, no markdown.",
             "- No greeting, no sign-off, no subject line — this is the body of one form field.",
             "- Return the text only, with nothing before or after it.",
@@ -185,6 +189,21 @@ def generate(*, field: str, context: dict[str, str], instruction: str = "", exis
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=45)
+        # An auth failure is not transient: "try again in a moment" sends the
+        # user into a retry loop that can never succeed. Name the real cause so
+        # whoever sees it knows the server needs a new key, not another click.
+        if response.status_code in (401, 403):
+            logger.error(
+                "Text generation rejected by %s: HTTP %s — the API key is invalid or expired.",
+                url,
+                response.status_code,
+            )
+            raise ComposeError(
+                "The AI text service rejected this server's API key. "
+                "It is invalid or expired — an administrator needs to update it."
+            )
+        if response.status_code == 429:
+            raise ComposeError("The AI text service is rate-limited right now. Try again shortly.")
         response.raise_for_status()
         data = response.json()
         text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""

@@ -4,12 +4,9 @@ import io
 import logging
 import os
 import uuid
-from typing import Any
 
 import strawberry
-import requests
 from django.contrib.auth import authenticate
-from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -52,51 +49,6 @@ PROFILE_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024
 
 _TENANT_ADMIN_ROLES = {UserRole.HOSPITAL_ADMIN, UserRole.UNIV_ADMIN}
-
-
-def _google_identity_payload(credential: str) -> dict[str, Any] | None:
-    """Verify a Google ID token via Google's tokeninfo endpoint."""
-    if not credential or not getattr(settings, "GOOGLE_CLIENT_ID", None):
-        return None
-
-    try:
-        response = requests.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": credential},
-            timeout=5,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        return None
-
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-
-    aud = data.get("aud")
-    email = (data.get("email") or "").strip().lower()
-    if not aud or not email:
-        return None
-    if aud != getattr(settings, "GOOGLE_CLIENT_ID"):
-        return None
-    return {"email": email, "name": (data.get("name") or "").strip()}
-
-
-def _authenticate_google_user(credential: str) -> User | None:
-    payload = _google_identity_payload(credential)
-    if not payload:
-        return None
-
-    email = payload["email"]
-    try:
-        user = User.objects.get(email__iexact=email)
-    except User.DoesNotExist:
-        return None
-
-    if not user.is_active:
-        return None
-    return user
 
 
 def _build_auth_payload(user: User) -> AuthPayload:
@@ -197,14 +149,6 @@ class UsersMutation:
                     pass
         if user is None or not user.is_active:
             raise PermissionDenied("Invalid credentials.")
-        return _build_auth_payload(user)
-
-    @strawberry.mutation
-    def login_with_google(self, info: Info, credential: str) -> AuthPayload:
-        """Verify a Google ID token and sign the matching user in."""
-        user = _authenticate_google_user(credential.strip())
-        if user is None:
-            raise PermissionDenied("Google sign-in failed for the provided account.")
         return _build_auth_payload(user)
 
     @strawberry.mutation

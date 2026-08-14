@@ -100,6 +100,17 @@ def ask(
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=45)
+        # Falling back to the local answer is right either way, but an expired
+        # key degrades every reply silently and indefinitely. Log it as an error
+        # naming the cause, so it is visible rather than buried in a traceback.
+        if response.status_code in (401, 403):
+            logger.error(
+                "%s rejected the chat API key (HTTP %s) — it is invalid or expired. "
+                "Every answer will come from the local knowledge base until it is replaced.",
+                provider,
+                response.status_code,
+            )
+            return ProviderReply(local_answer(question, role), provider, model, True)
         response.raise_for_status()
         data = response.json()
         answer = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
