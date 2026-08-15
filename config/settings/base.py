@@ -283,7 +283,10 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "users.User"
 
-JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", SECRET_KEY)
+# A present-but-blank JWT_SIGNING_KEY= line in .env made os.environ.get return
+# "" instead of falling back to SECRET_KEY, so every token was HS256-signed with
+# an empty key — forgeable by anyone, for any user. Treat blank as unset.
+JWT_SIGNING_KEY = os.environ.get("JWT_SIGNING_KEY", "").strip() or SECRET_KEY
 JWT_ALGORITHM = "HS256"
 # Short-lived access tokens (Authorization: Bearer …). Prefer minutes over the legacy hours setting.
 JWT_ACCESS_EXPIRY_MINUTES = int(os.environ.get("JWT_ACCESS_EXPIRY_MINUTES", "60"))
